@@ -24,6 +24,14 @@ class LocalStore {
   subscribe(cb) { this.listeners.push(cb); cb(Object.values(this._read())); return () => { this.listeners = this.listeners.filter((x) => x !== cb); }; }
   async save(p) { const all = this._read(); p.updatedAt = new Date().toISOString(); all[p.id] = clean(p); this._write(all); }
   async remove(id) { const all = this._read(); delete all[id]; this._write(all); }
+  // small settings documents (e.g. the edited formula list)
+  subscribeMeta(key, cb) {
+    let v = null; try { v = JSON.parse(localStorage.getItem('pn_meta_' + key) || 'null'); } catch {}
+    cb(v); return () => {};
+  }
+  async saveMeta(key, value) {
+    try { localStorage.setItem('pn_meta_' + key, JSON.stringify(value)); } catch (e) { alert('Could not save: ' + e.message); }
+  }
 }
 
 class FirebaseStore {
@@ -57,6 +65,12 @@ class FirebaseStore {
     await this.f.setDoc(this.f.doc(this._col(), p.id), clean(p));
   }
   async remove(id) { await this.f.deleteDoc(this.f.doc(this._col(), id)); }
+  _meta(key) { return this.f.doc(this.db, 'users', this.user.uid, 'meta', key); }
+  subscribeMeta(key, cb) {
+    if (!this.user) { cb(null); return () => {}; }
+    return this.f.onSnapshot(this._meta(key), (d) => cb(d.exists() ? d.data().value : null), () => cb(null));
+  }
+  async saveMeta(key, value) { await this.f.setDoc(this._meta(key), clean({ value, updatedAt: new Date().toISOString() })); }
 }
 
 export const store = firebaseConfig ? new FirebaseStore() : new LocalStore();

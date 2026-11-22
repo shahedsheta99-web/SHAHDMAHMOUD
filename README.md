@@ -10,15 +10,15 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 |---|---|
 | Patient files | A separate file for each patient: demographics, assessments, PYMS, follow-ups, discharge |
 | Energy | **Schofield** (weight, or weight + height) × activity factor × stress factor (includes **1.95** and **2.25**, plus custom) |
-| Protein | **ASPEN** pediatric ranges (critically ill), or DRI for stable patients; g/kg is editable |
+| Protein | Range by age (< 1 y 2.5–3, 1–10 y 1.5–2.5, > 10 y 0.8–2 g/kg) shown as min–max g/day, or DRI. **Protein restriction** for AKI / CKD / other renal impairment |
 | Fluid | **Holliday–Segar** (100 / 50 / 20 mL/kg), % of maintenance, mL/h |
 | Weights | Actual, **Ideal** (≤ 150 cm: Ht² × 1.65 / 1000), **Adjusted** (IBW + 0.25 × (Actual − IBW)), usual or custom. **Each calculation (energy, protein, fluid) can use a different weight** |
 | Anthropometry | BMI, %IBW, weight change, z-scores and centiles |
 | Growth charts | CDC weight/age (0–36 m and 2–20 y), height/age and BMI/age (2–20 y), with patient points plotted |
-| Formula | Oral formulas filtered by **age group** and ranked by how well kcal and protein match the needs; regimen builder shows % of needs |
+| Formula | Oral formulas filtered by **age group**, ranked by protein range and by **abnormal lab electrolytes**; electrolyte (Na, K, Ca, P, Mg) warnings; **editable formula list inside the app** |
 | PYMS | Weekly screening with automatic BMI cut-off (S1), totals, risk and a trend chart |
 | Oncology risk | The nutrition risk factor score from your sheet |
-| Follow-up | Daily sheet: prescription, feeding, events, vitals and labs with out-of-range flags, plus a lab trend table |
+| Follow-up | Daily sheet: prescription, feeding, **fluid balance (medication fluids, IV, formula → mL remaining)**, events, vitals and labs flagged HIGH (red) / LOW (blue), plus a lab trend table |
 | Discharge | Discharge summary with an automatic weight/PYMS/LOS summary |
 | Printing | Print or save as PDF: the full file or any single section |
 | Sync | Optional login + live sync across all devices (Firebase) |
@@ -28,7 +28,7 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 | File | What is inside |
 |---|---|
 | `js/calc.js` | All equations (Schofield, ASPEN, Holliday–Segar, IBW, PYMS, …) |
-| `js/formulas.js` | The oral formula list (from Nutrition.pdf). Add or edit one line per product |
+| `js/formulas.js` | The starting oral formula list (edit products inside the app on the Formulas page) |
 | `js/labs.js` | Lab tests and reference ranges |
 | `js/growth-data.js` | CDC growth data (generated from your .xls files) |
 | `js/app.js` | Screens, forms and printed reports |

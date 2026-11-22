@@ -98,22 +98,39 @@ export function schofield(equation, sex, ageYears, weightKg, heightCm) {
 export const ACTIVITY_FACTORS = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
 export const STRESS_FACTORS = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.95, 2.0, 2.25];
 
-// ---------- Protein (ASPEN) ----------
-//  ASPEN pediatric critical care (Mehta 2009; ASPEN/SCCM 2017 minimum 1.5 g/kg/d)
-//  DRI/RDA values (ASPEN Pediatric Core Curriculum) for stable / healthy maintenance
+// ---------- Protein ----------
+//  'aspen' (unit protocol, default):  < 1 y 2.5–3 g/kg · 1–10 y 1.5–2.5 g/kg · > 10 y 0.8–2 g/kg
+//  'dri'  : DRI/RDA values for stable / healthy maintenance
+export function driProtein(ageYears) {
+  if (ageYears < 0.5) return 1.52;
+  if (ageYears < 1) return 1.2;
+  if (ageYears < 4) return 1.05;
+  if (ageYears < 14) return 0.95;
+  if (ageYears < 19) return 0.85;
+  return 0.8;
+}
 export function proteinGuide(guideline, ageYears) {
   if (ageYears == null) return null;
-  if (guideline === 'dri') {
-    if (ageYears < 0.5) return { min: 1.52, max: 1.52, label: 'DRI 0–6 months' };
-    if (ageYears < 1) return { min: 1.2, max: 1.2, label: 'DRI 7–12 months' };
-    if (ageYears < 4) return { min: 1.05, max: 1.05, label: 'DRI 1–3 y' };
-    if (ageYears < 14) return { min: 0.95, max: 0.95, label: 'DRI 4–13 y' };
-    if (ageYears < 19) return { min: 0.85, max: 0.85, label: 'DRI 14–18 y' };
-    return { min: 0.8, max: 0.8, label: 'DRI adult' };
-  }
-  if (ageYears < 2) return { min: 2, max: 3, label: 'ASPEN critically ill 0–2 y' };
-  if (ageYears < 13) return { min: 1.5, max: 2, label: 'ASPEN critically ill 2–13 y' };
-  return { min: 1.5, max: 1.5, label: 'ASPEN critically ill 13–18 y (minimum 1.5)' };
+  if (guideline === 'dri') { const d = driProtein(ageYears); return { min: d, max: d, label: 'DRI for age' }; }
+  if (ageYears < 1) return { min: 2.5, max: 3, label: 'Age < 1 y' };
+  if (ageYears <= 10) return { min: 1.5, max: 2.5, label: 'Age 1–10 y' };
+  return { min: 0.8, max: 2, label: 'Age > 10 y' };
+}
+
+//  Protein restriction in renal impairment. Default ranges (editable in the app):
+//   CKD stage 3      : 100–140 % of DRI for age (KDOQI pediatric CKD 2008)
+//   CKD stage 4–5    : 100–120 % of DRI for age (KDOQI pediatric CKD 2008)
+//   AKI / other renal: 100–120 % of DRI for age (starting point only; adjust to the clinical picture)
+export const RENAL_OPTIONS = [
+  ['none', 'No renal impairment'], ['aki', 'AKI'], ['ckd3', 'CKD stage 3'],
+  ['ckd45', 'CKD stage 4–5'], ['other', 'Other renal impairment'],
+];
+const RENAL_FACTORS = { aki: [1, 1.2], ckd3: [1, 1.4], ckd45: [1, 1.2], other: [1, 1.2] };
+export function renalDefault(renal, ageYears) {
+  const f = RENAL_FACTORS[renal];
+  if (!f || ageYears == null) return null;
+  const d = driProtein(ageYears);
+  return { min: +(d * f[0]).toFixed(2), max: +(d * f[1]).toFixed(2) };
 }
 
 // ---------- Fluid (Holliday–Segar) ----------
@@ -160,10 +177,18 @@ export function computeAssessment(patient, a) {
   const tee = num(e.override) ?? teeCalc;
   // Protein
   const pW = pickWeight(p.weightBasis || 'actual', weights, p.customWeight);
-  const guide = proteinGuide(p.guideline || 'aspen', ageY);
+  let guide = proteinGuide(p.guideline || 'aspen', ageY);
+  const renal = p.renal && p.renal !== 'none' ? p.renal : null;
+  if (renal && ageY != null) {
+    const d = renalDefault(renal, ageY);
+    const min = num(p.restrictMin) ?? d.min, max = num(p.restrictMax) ?? d.max;
+    guide = { min, max, label: `Protein restriction: ${RENAL_OPTIONS.find((o) => o[0] === renal)[1]}`, renal: true };
+  }
   const gkg = num(p.gPerKg) ?? guide?.max ?? null;
   const proteinCalc = pW && gkg ? pW * gkg : null;
   const protein = num(p.override) ?? proteinCalc;
+  const pMin = pW && guide ? pW * guide.min : null, pMax = pW && guide ? pW * guide.max : null;
+  const pStatus = gkg == null || !guide ? null : gkg < guide.min - 1e-9 ? 'below' : gkg > guide.max + 1e-9 ? 'above' : 'within';
   // Fluid
   const fW = pickWeight(f.weightBasis || 'actual', weights, f.customWeight);
   const hs = hollidaySegar(fW);
@@ -176,7 +201,7 @@ export function computeAssessment(patient, a) {
     pctIBW: actual && ideal ? (actual / ideal) * 100 : null,
     wtChange: actual && num(a.usualWeight) ? ((actual - num(a.usualWeight)) / num(a.usualWeight)) * 100 : null,
     energy: { weight: eW, ree, activity: act, stress: str, teeCalc, tee, perKg: tee && eW ? tee / eW : null, overridden: num(e.override) != null },
-    protein: { weight: pW, guide, gkg, calc: proteinCalc, value: protein, overridden: num(p.override) != null },
+    protein: { weight: pW, guide, gkg, calc: proteinCalc, value: protein, min: pMin, max: pMax, status: pStatus, renal, overridden: num(p.override) != null },
     fluid: { weight: fW, hs, percent: pct, calc: fluidCalc, value: fluid, perHour: fluid ? fluid / 24 : null, overridden: num(f.override) != null },
     z: growthZ(patient.sex, ageM, actual, height, b),
   };

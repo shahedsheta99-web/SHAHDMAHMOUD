@@ -3,7 +3,7 @@
 // =====================================================================
 import { store, newId } from './store.js';
 import * as C from './calc.js';
-import { FORMULAS, formulaById, fitsAge, recommendFormulas, regimenTotals, evaluateFormula } from './formulas.js';
+import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
 import { LABS, labFlag } from './labs.js';
 import { growthChart, trendChart } from './charts.js';
 
@@ -82,6 +82,11 @@ function blankPatient() {
   return { id: newId(), createdAt: new Date().toISOString(), name: '', mrn: '', sex: '', dob: '', admissionDate: today(),
     ward: '', diagnosis: '', notes: '', status: 'active', assessments: [], pyms: [], followUps: [], measurements: [], discharge: {} };
 }
+function saveFormulas(list, msg) {
+  setCustomFormulas(list);
+  store.saveMeta('formulas', list).catch((e) => alert('Save failed: ' + e.message));
+  toast(msg);
+}
 function savePatient(p, msg = 'Saved') {
   const i = state.patients.findIndex((x) => x.id === p.id);
   if (i >= 0) state.patients[i] = p; else state.patients.push(p);
@@ -111,7 +116,7 @@ function render() {
   try {
     if (view === 'list') html = viewList();
     else if (view === 'new') html = viewPatientForm(blankPatient(), true);
-    else if (view === 'formulas') html = viewFormulas();
+    else if (view === 'formulas') html = viewFormulas(parts);
     else if (view === 'settings') html = viewSettings();
     else if (view === 'p') {
       const p = getP(parts[1]);
@@ -220,7 +225,7 @@ function needsCard(res, title = 'Nutrition requirements') {
   if (!res) return '';
   return `<div class="needs">
     <div class="need"><span>Energy</span><b>${fmt(res.energy.tee, 0)}</b><em>kcal/day</em><small>${res.energy.perKg ? fmt(res.energy.perKg, 0) + ' kcal/kg' : ''}</small></div>
-    <div class="need"><span>Protein</span><b>${fmt(res.protein.value)}</b><em>g/day</em><small>${res.protein.gkg ? fmt(res.protein.gkg, 2) + ' g/kg' : ''}</small></div>
+    <div class="need"><span>Protein${res.protein.renal ? ' · restricted' : ''}</span><b>${fmt(res.protein.value)}</b><em>g/day</em><small>${res.protein.min != null ? `range ${fmt(res.protein.min)}–${fmt(res.protein.max)} g` : ''}${res.protein.gkg ? ` · ${fmt(res.protein.gkg, 2)} g/kg` : ''}</small></div>
     <div class="need"><span>Fluid</span><b>${fmt(res.fluid.value, 0)}</b><em>mL/day</em><small>${res.fluid.perHour ? fmt(res.fluid.perHour, 0) + ' mL/h' : ''}</small></div>
   </div>`;
 }
@@ -306,13 +311,16 @@ function tabAssessment(p, aid) {
       ${fld('Final kcal override', 'energy.override', e.override, { type: 'number', unit: 'kcal', placeholder: 'auto' })}
     </div></div>
 
-    <div class="card"><h3>Protein: ASPEN</h3><div class="g3">
-      ${fld('Guideline', 'protein.guideline', pr.guideline, { type: 'select', options: [['aspen', 'ASPEN critically ill / hospitalized'], ['dri', 'DRI (stable / maintenance)']], cls: 'span2' })}
+    <div class="card"><h3>Protein</h3><div class="g3">
+      ${fld('Range', 'protein.guideline', pr.guideline, { type: 'select', options: [['aspen', 'By age: <1 y 2.5–3 · 1–10 y 1.5–2.5 · >10 y 0.8–2 g/kg'], ['dri', 'DRI (stable / maintenance)']], cls: 'span2' })}
       ${fld('Weight used', 'protein.weightBasis', pr.weightBasis, { type: 'select', options: wOpts })}
       ${fld('Custom weight', 'protein.customWeight', pr.customWeight, { type: 'number', unit: 'kg', cls: 'cw' })}
-      ${fld('Protein', 'protein.gPerKg', pr.gPerKg, { type: 'number', unit: 'g/kg/day' })}
+      ${fld('Renal status', 'protein.renal', pr.renal || 'none', { type: 'select', options: C.RENAL_OPTIONS, cls: 'span2' })}
+      ${fld('Restricted min', 'protein.restrictMin', pr.restrictMin, { type: 'number', unit: 'g/kg', cls: 'rr' })}
+      ${fld('Restricted max', 'protein.restrictMax', pr.restrictMax, { type: 'number', unit: 'g/kg', cls: 'rr' })}
+      ${fld('Chosen protein', 'protein.gPerKg', pr.gPerKg, { type: 'number', unit: 'g/kg/day' })}
       ${fld('Final protein override', 'protein.override', pr.override, { type: 'number', unit: 'g', placeholder: 'auto' })}
-    </div><p class="small muted" id="ptnGuide"></p></div>
+    </div><div class="small" id="ptnGuide"></div></div>
 
     <div class="card"><h3>Fluid: Holliday–Segar</h3><div class="g3">
       ${fld('Weight used', 'fluid.weightBasis', fl.weightBasis, { type: 'select', options: wOpts })}
@@ -368,7 +376,7 @@ function assessResultsHTML(p, a) {
     <div class="calc small">
       <p><b>REE</b> = ${r.energy.ree ? `${h(r.energy.ree.text)} → <b>${fmt(r.energy.ree.value)}</b> kcal (W = ${fmt(r.energy.weight)} kg)` : 'enter sex, DOB, weight' + (a.energy?.equation === 'WH' ? ' and height' : '')}</p>
       <p><b>TEE</b> = REE × ${fmt(r.energy.activity, 2)} (activity) × ${fmt(r.energy.stress, 2)} (stress) = <b>${fmt(r.energy.teeCalc, 0)}</b> kcal${r.energy.overridden ? ` → override <b>${fmt(r.energy.tee, 0)}</b>` : ''}</p>
-      <p><b>Protein</b> = ${fmt(r.protein.gkg, 2)} g/kg × ${fmt(r.protein.weight)} kg = <b>${fmt(r.protein.calc)}</b> g${r.protein.overridden ? ` → override <b>${fmt(r.protein.value)}</b>` : ''}</p>
+      <p><b>Protein</b> = ${fmt(r.protein.gkg, 2)} g/kg × ${fmt(r.protein.weight)} kg = <b>${fmt(r.protein.calc)}</b> g${r.protein.overridden ? ` → override <b>${fmt(r.protein.value)}</b>` : ''} · range ${fmt(r.protein.min)}–${fmt(r.protein.max)} g/day (${fmt(r.protein.guide?.min, 2)}–${fmt(r.protein.guide?.max, 2)} g/kg)</p>
       <p><b>Fluid</b> = Holliday–Segar(${fmt(r.fluid.weight)} kg) ${fmt(r.fluid.hs, 0)} mL × ${fmt(r.fluid.percent, 0)}% = <b>${fmt(r.fluid.calc, 0)}</b> mL${r.fluid.overridden ? ` → override <b>${fmt(r.fluid.value, 0)}</b>` : ''}</p>
     </div>`;
 }
@@ -386,7 +394,17 @@ function updateAssessLive() {
   form.querySelector('.cstr').style.display = a.energy.stress === 'custom' ? '' : 'none';
   const r = C.computeAssessment(p, a);
   const g = r.protein.guide;
-  $('#ptnGuide').textContent = g ? `${g.label}: ${g.min === g.max ? g.min : g.min + '–' + g.max} g/kg/day` : 'Enter date of birth to see the recommended range.';
+  const renalOn = a.protein.renal && a.protein.renal !== 'none';
+  form.querySelectorAll('.rr').forEach((el) => { el.style.display = renalOn ? '' : 'none'; });
+  if (renalOn) {
+    const d = C.renalDefault(a.protein.renal, r.ageY);
+    if (d) { form.querySelector('[name="protein.restrictMin"]').placeholder = d.min; form.querySelector('[name="protein.restrictMax"]').placeholder = d.max; }
+  }
+  const pr = r.protein;
+  $('#ptnGuide').innerHTML = g ? `<p class="muted">${h(g.label)}: <b>${fmt(g.min, 2)}–${fmt(g.max, 2)} g/kg/day</b>${pr.min != null ? ` = <b>${fmt(pr.min)}–${fmt(pr.max)} g/day</b> for ${fmt(pr.weight)} kg` : ''}</p>
+    ${pr.status === 'above' ? `<p class="pill bad">Chosen ${fmt(pr.gkg, 2)} g/kg is ABOVE the range</p>` : pr.status === 'below' ? `<p class="pill warn">Chosen ${fmt(pr.gkg, 2)} g/kg is BELOW the range</p>` : pr.status === 'within' ? '<p class="pill good">Within range</p>' : ''}
+    ${renalOn ? '<p class="muted">Restricted range defaults: CKD 3 = 100–140 % DRI, CKD 4–5 = 100–120 % DRI (KDOQI 2008); AKI / other = 100–120 % DRI as a starting point. Type your own values to change them.</p>' : ''}`
+    : '<p class="muted">Enter date of birth to see the recommended range.</p>';
   const rk = C.oncologyRisk(a.risk, r.pctIBW, a.albumin);
   $('#riskResult').innerHTML = `<p>%IBW points: ${rk.ibwPts} · Wt loss points: ${rk.wlPts} · Albumin points: ${rk.albPts}</p>
     <p><b>Total: ${rk.pts}</b> <span class="pill ${rk.cat.cls}">${rk.cat.label}</span> <small class="muted">(0–1 low, 2–3 moderate, ≥ 4 high)</small></p>`;
@@ -395,28 +413,52 @@ function updateAssessLive() {
 // =====================================================================
 //  FORMULA
 // =====================================================================
+// Latest value of each lab test across follow-ups (newest non-empty value wins).
+function latestLabs(p, current) {
+  const out = {};
+  (p.followUps || []).slice().sort(byDate).forEach((f) => {
+    Object.entries(f.labs || {}).forEach(([k, v]) => { if (v !== '' && v != null) out[k] = { v, date: f.date }; });
+  });
+  if (current) Object.entries(current).forEach(([k, v]) => { if (v !== '' && v != null) out[k] = { v, date: 'this sheet' }; });
+  return out;
+}
+function lyteLabStatus(labs) {
+  const s = {};
+  ELECTROLYTES.forEach(([k, , lk]) => { const fl = labFlag(lk, labs[lk]?.v); if (fl) s[k] = fl; });
+  return s;
+}
+const labName = (lk) => LABS.find((l) => l[0] === lk);
+
 function tabFormula(p) {
   const a = latest(p.assessments);
   if (!a) return `<div class="card">Complete an <a href="#/p/${p.id}/assessment">assessment</a> first so the app knows the patient's needs.</div>`;
   const r = C.computeAssessment(p, a);
   const kcal = r.energy.tee, ptn = r.protein.value;
-  const recs = recommendFormulas(r.ageY, kcal, ptn);
+  const labs = latestLabs(p); const status = lyteLabStatus(labs);
+  const recs = recommendFormulas(r.ageY, kcal, ptn, r.protein.min, r.protein.max, status);
   const reg = a.regimen || { items: [] };
   const items = reg.items?.length ? reg.items : [{ id: recs[0]?.f.id || '', servings: recs[0] ? +recs[0].ev.servings.toFixed(1) : '' }];
+  const lyteCols = ELECTROLYTES.filter(([k]) => status[k] || ['na', 'k', 'p'].includes(k));
+  const pPill = (ev) => `<span class="pill ${ev.pStatus === 'within' ? 'good' : ev.pStatus ? 'warn' : ''}">${ev.pStatus === 'within' ? 'in range' : ev.pStatus === 'above' ? 'above range' : ev.pStatus === 'below' ? 'below range' : fmt(ev.proteinPct, 0) + '%'}</span>`;
   const rows = recs.map(({ f, ev }, i) => `<tr class="${i === 0 ? 'best' : ''}">
-      <td><b>${h(f.name)}</b>${i === 0 ? ' <span class="pill good">Best match</span>' : ''}</td><td>${h(f.age)}</td>
+      <td><b>${h(f.name)}</b>${i === 0 ? ' <span class="pill good">Best match</span>' : ''}</td><td>${h(ageLabel(f))}</td>
       <td>${f.kcal} kcal / ${f.protein} g${f.scoops ? `<br><small>${f.scoops} scoops in ${f.volume} mL</small>` : ''}</td>
       <td>${fmt(ev.servings)}</td><td>${ev.scoops ? fmt(ev.scoops, 0) : '—'}</td><td>${ev.volume ? fmt(ev.volume, 0) + ' mL' : '—'}</td>
-      <td>${fmt(ev.protein)} g <span class="pill ${ev.proteinPct < 90 ? 'warn' : ev.proteinPct > 130 ? 'warn' : 'good'}">${fmt(ev.proteinPct, 0)}%</span></td>
+      <td>${fmt(ev.protein)} g ${pPill(ev)}</td>
+      ${lyteCols.map(([k]) => `<td class="${status[k] || ''}">${ev.lytes[k] == null ? '<span class="muted">?</span>' : fmt(ev.lytes[k], 0)}</td>`).join('')}
       <td><button type="button" class="btn sm ghost" data-action="useFormula" data-fid="${f.id}" data-serv="${ev.servings.toFixed(1)}">Use</button></td></tr>`).join('');
-  const others = FORMULAS.filter((f) => !recs.some((x) => x.f.id === f.id));
+  const others = formulas().filter((f) => !recs.some((x) => x.f.id === f.id));
+  const abn = Object.entries(status);
   return `<div class="card"><h3>Targets from assessment of ${fdate(a.date)}</h3>${needsCard(r)}
-    <p class="small muted">Age ${C.ageText(r.age)}. Products are filtered by age group, then ranked by how closely their protein matches the protein need when the full energy need is given by that product.</p></div>
+    <p class="small muted">Age ${C.ageText(r.age)}. Products are filtered by age group. Products whose protein falls inside the protein range (${fmt(r.protein.min)}–${fmt(r.protein.max)} g) when they give the full energy need rank first${abn.length ? ', then those with the least of the electrolytes that are high in the labs' : ''}.</p>
+    ${abn.length ? `<div class="alert ${abn.some(([, v]) => v === 'high') ? 'bad' : 'warn'}"><b>Abnormal electrolytes in the latest labs:</b> ${abn.map(([k, v]) => { const lk = ELECTROLYTES.find((e) => e[0] === k)[2]; return `${labName(lk)[1]} ${labs[lk].v} ${labName(lk)[2]} (${v === 'high' ? 'HIGH ↑' : 'LOW ↓'}, ${labs[lk].date === 'this sheet' ? '' : fdate(labs[lk].date)})`; }).join(' · ')}. The ranking prefers formulas with ${abn.map(([k, v]) => `${v === 'high' ? 'less' : 'more'} ${ELECTROLYTES.find((e) => e[0] === k)[1]}`).join(', ')}.</div>` : ''}
+  </div>
   <div class="card"><h3>Recommended oral formulas</h3>
-    ${recs.length ? `<div class="tablewrap"><table class="tbl"><thead><tr><th>Product</th><th>Age gp.</th><th>Per serving</th><th>Servings/day for ${fmt(kcal, 0)} kcal</th><th>Scoops/day</th><th>Volume/day</th><th>Protein provided (vs ${fmt(ptn)} g)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+    ${recs.length ? `<div class="tablewrap"><table class="tbl labs"><thead><tr><th>Product</th><th>Age gp.</th><th>Per serving</th><th>Servings/day for ${fmt(kcal, 0)} kcal</th><th>Scoops/day</th><th>Volume/day</th><th>Protein (range ${fmt(r.protein.min)}–${fmt(r.protein.max)} g)</th>${lyteCols.map(([, l]) => `<th>${l} mg/day</th>`).join('')}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="small muted">"?" = electrolyte content not entered yet. Add it on the <a href="#/formulas">Formulas</a> page from the product label.</p>`
     : '<p class="muted">No product in the list matches this age group (or needs are not calculated yet).</p>'}
     <details><summary class="small">Products not suitable for this age / add-ons (${others.length})</summary>
-    <ul class="small">${others.map((f) => `<li>${h(f.name)}: ${h(f.age)}, ${f.kcal} kcal, ${f.protein} g protein ${f.type === 'module' ? '(add-on module)' : ''} ${fitsAge(f, r.ageY) ? '' : '<span class="muted">not for this age</span>'}</li>`).join('')}</ul></details>
+    <ul class="small">${others.map((f) => `<li>${h(f.name)}: ${h(ageLabel(f))}, ${f.kcal} kcal, ${f.protein} g protein ${f.type === 'module' ? '(add-on module)' : ''} ${fitsAge(f, r.ageY) ? '' : '<span class="muted">not for this age</span>'}</li>`).join('')}</ul></details>
   </div>
   <form id="regimenForm" class="card" data-pid="${p.id}" data-aid="${a.id}"><h3>Prescribed regimen</h3>
     <div id="regRows">${items.map((it) => regimenRow(it)).join('')}</div>
@@ -433,27 +475,50 @@ function tabFormula(p) {
 function regimenRow(it = {}) {
   const k = 'r' + newId();
   return `<div class="regrow g3">
-    ${fld('Product', `regimen.items.${k}.id`, it.id, { type: 'select', options: [['', '— select —'], ...FORMULAS.map((f) => [f.id, `${f.name} (${f.age})`])], cls: 'span2' })}
+    ${fld('Product', `regimen.items.${k}.id`, it.id, { type: 'select', options: [['', '— select —'], ...formulas().map((f) => [f.id, `${f.name} (${ageLabel(f)})`])], cls: 'span2' })}
     <div class="row gap end">${fld('Servings/day', `regimen.items.${k}.servings`, it.servings, { type: 'number' })}
     <button type="button" class="btn sm ghost" data-action="rmRow" title="Remove">✕</button></div></div>`;
 }
-function regimenTotalsHTML(items, r) {
+
+// Electrolyte warnings: regimen content vs abnormal labs.
+function lyteAlerts(t, labs, weight) {
+  const out = [];
+  ELECTROLYTES.forEach(([k, label, lk, mgPerMmol]) => {
+    const mg = t.lytes[k], mmol = mg / mgPerMmol, perKg = weight ? mmol / weight : null;
+    const lab = labs[lk], fl = labFlag(lk, lab?.v);
+    const amount = mg ? `${fmt(mg, 0)} mg (${fmt(mmol, 1)} mmol${perKg ? `, ${fmt(perKg, 2)} mmol/kg` : ''}) per day` : null;
+    const missing = t.missingBy[k].length ? ` No ${label} data for: ${h(t.missingBy[k].join(', '))}, so the real amount may be higher.` : '';
+    if (fl === 'high') out.push(['bad', `<b>${label} is HIGH</b> in the labs (${h(lab.v)} ${labName(lk)[2]}). ${amount ? `This regimen gives ${amount}. Consider a formula with less ${label} or reducing the volume.` : `${label} content of this regimen is unknown.`}${missing}`]);
+    else if (fl === 'low') out.push(['warn', `<b>${label} is LOW</b> in the labs (${h(lab.v)} ${labName(lk)[2]}). ${amount ? `This regimen gives ${amount}.` : ''} Consider supplementation or a formula with more ${label}.`]);
+    if ((k === 'na' || k === 'k') && perKg > 4) out.push(['warn', `<b>${label} intake is high</b>: ${fmt(perKg, 1)} mmol/kg/day from formula alone (usual maintenance 2–4 mmol/kg/day).`]);
+  });
+  return out.map(([c, m]) => `<div class="alert ${c}">${m}</div>`).join('');
+}
+function regimenTotalsHTML(items, r, labs = {}) {
   const t = regimenTotals(items);
   const pct = (x, y) => (y ? `<span class="pill ${x / y < 0.9 ? 'warn' : x / y > 1.15 ? 'warn' : 'good'}">${fmt((x / y) * 100, 0)}%</span>` : '');
-  return `<table class="tbl compact"><thead><tr><th></th><th>Provided</th><th>Target</th><th>% of need</th></tr></thead><tbody>
+  const pIn = r.protein.min != null ? (t.protein < r.protein.min ? '<span class="pill warn">below range</span>' : t.protein > r.protein.max ? '<span class="pill bad">above range</span>' : '<span class="pill good">in range</span>') : pct(t.protein, r.protein.value);
+  const w = r.weights.actual;
+  const anyLyte = ELECTROLYTES.some(([k]) => t.lytes[k] > 0);
+  return `<table class="tbl compact"><thead><tr><th></th><th>Provided</th><th>Target</th><th>Status</th></tr></thead><tbody>
     <tr><td>Energy</td><td>${fmt(t.kcal, 0)} kcal</td><td>${fmt(r.energy.tee, 0)} kcal</td><td>${pct(t.kcal, r.energy.tee)}</td></tr>
-    <tr><td>Protein</td><td>${fmt(t.protein)} g</td><td>${fmt(r.protein.value)} g</td><td>${pct(t.protein, r.protein.value)}</td></tr>
+    <tr><td>Protein</td><td>${fmt(t.protein)} g</td><td>${fmt(r.protein.min)}–${fmt(r.protein.max)} g</td><td>${pIn}</td></tr>
     <tr><td>Formula volume</td><td>${fmt(t.volume, 0)} mL</td><td>${fmt(r.fluid.value, 0)} mL fluid</td><td>${pct(t.volume, r.fluid.value)}</td></tr>
-    <tr><td>Scoops/day</td><td>${fmt(t.scoops, 0)}</td><td></td><td></td></tr></tbody></table>`;
+    <tr><td>Scoops/day</td><td>${fmt(t.scoops, 0)}</td><td></td><td></td></tr></tbody></table>
+    ${anyLyte || Object.keys(labs).length ? `<h4>Electrolytes from formula</h4><div class="tablewrap"><table class="tbl compact labs"><thead><tr><th></th><th>mg/day</th><th>mmol/day</th><th>mmol/kg/day</th><th>Latest lab</th></tr></thead><tbody>
+    ${ELECTROLYTES.map(([k, label, lk, m]) => { const fl = labFlag(lk, labs[lk]?.v); return `<tr><td>${label}</td><td>${t.lytes[k] ? fmt(t.lytes[k], 0) : '—'}</td><td>${t.lytes[k] ? fmt(t.lytes[k] / m, 1) : '—'}</td><td>${t.lytes[k] && w ? fmt(t.lytes[k] / m / w, 2) : '—'}</td><td class="${fl}">${labs[lk] ? `${h(labs[lk].v)} ${labName(lk)[2]}${fl === 'high' ? ' ↑ HIGH' : fl === 'low' ? ' ↓ LOW' : ''}` : '—'}</td></tr>`; }).join('')}
+    </tbody></table></div>${ELECTROLYTES.some(([k]) => t.missingBy[k].length) ? `<p class="small muted">Not entered yet: ${ELECTROLYTES.filter(([k]) => t.missingBy[k].length).map(([k, l]) => `${l} (${h(t.missingBy[k].join(', '))})`).join(' · ')}. Add them on the Formulas page.</p>` : ''}` : ''}
+    ${lyteAlerts(t, labs, w)}`;
 }
 const normItems = (obj) => Object.values(obj || {}).filter((x) => x.id).map((x) => ({ id: x.id, servings: x.servings }));
 function updateRegimenLive() {
   const form = $('#regimenForm') || $('#fuForm'); if (!form) return;
   const p = getP(form.dataset.pid); const a = latest(p.assessments);
-  const box = form.querySelector('#regTotals'); if (!box) return;
-  if (!a) { box.innerHTML = ''; return; }
   const d = readForm(form);
-  box.innerHTML = regimenTotalsHTML(normItems(d.regimen?.items), C.computeAssessment(p, a));
+  const items = normItems(d.regimen?.items);
+  const box = form.querySelector('#regTotals');
+  if (box) box.innerHTML = a ? regimenTotalsHTML(items, C.computeAssessment(p, a), latestLabs(p, form.id === 'fuForm' ? d.labs : null)) : '';
+  if (form.id === 'fuForm') updateFluidLive(form, d, items);
 }
 
 // =====================================================================
@@ -561,12 +626,58 @@ function updatePymsLive(fromWeight) {
 //  FOLLOW-UP (daily sheet)
 // =====================================================================
 const VITALS = [['bp', 'BP', 'mmHg'], ['hr', 'HR', 'bpm'], ['temp', 'Temp', '°C'], ['cvp', 'CVP', ''], ['urine', 'Urine', 'mL'], ['ryle', 'Ryle', 'mL'], ['drains', 'Drains', 'mL'], ['intake', 'Total in', 'mL'], ['output', 'Total out', 'mL']];
+const flagText = (fl) => (fl === 'high' ? '↑ HIGH' : fl === 'low' ? '↓ LOW' : '');
+function medRow(m = {}) {
+  const k = 'm' + newId();
+  return `<div class="medrow g5">
+    ${fld('Medication', `meds.${k}.name`, m.name, { cls: 'span2' })}
+    ${fld('Volume per dose', `meds.${k}.ml`, m.ml, { type: 'number', unit: 'mL' })}
+    ${fld('Doses per day', `meds.${k}.doses`, m.doses, { type: 'number' })}
+    <div class="row gap end"><span class="small muted medtot"></span><button type="button" class="btn sm ghost" data-action="rmMed" title="Remove">✕</button></div></div>`;
+}
+// Fluid plan: maintenance − (medications + IV + other + formula) = remaining
+function fluidCalc(f, items) {
+  const meds = (Array.isArray(f.meds) ? f.meds : Object.values(f.meds || {})).map((m) => ({ ...m, total: (+m.ml || 0) * (+m.doses || 0) }));
+  const medTotal = meds.reduce((s, m) => s + m.total, 0);
+  const iv = +f.fluidIn?.iv || 0, other = +f.fluidIn?.other || 0;
+  const formula = f.fluidIn?.noFormula ? 0 : regimenTotals(items || f.regimen?.items || []).volume;
+  const target = +f.rx?.fluid || 0;
+  const total = medTotal + iv + other + formula;
+  return { meds, medTotal, iv, other, formula, target, total, remaining: target - total, pct: target ? (total / target) * 100 : null };
+}
+function fluidStatus(c) {
+  if (!c.target) return ['warn', 'Enter the maintenance fluid in the Prescription "Fluids" box to see what is left.'];
+  if (c.remaining < 0) return ['bad', `<b>Over maintenance by ${fmt(-c.remaining, 0)} mL (${fmt(c.pct, 0)}%)</b>. Risk of fluid overload. Concentrate the formula, reduce IV fluids or ask about medication dilution.`];
+  if (c.pct < 90) return ['warn', `<b>${fmt(c.remaining, 0)} mL still to give</b> (${fmt(c.remaining / 24, 1)} mL/h over 24 h). Only ${fmt(c.pct, 0)}% of maintenance is covered, so there is a risk of dehydration if it is not given.`];
+  return ['good', `<b>${fmt(c.remaining, 0)} mL remaining</b> (${fmt(c.pct, 0)}% of maintenance covered). Fluid plan is balanced.`];
+}
+function fluidSummaryText(f) {
+  const c = fluidCalc(f); if (!c.total && !c.target) return '';
+  return `<div class="small">Fluids: medications ${fmt(c.medTotal, 0)} mL + IV ${fmt(c.iv, 0)} + other ${fmt(c.other, 0)} + formula ${fmt(c.formula, 0)} = ${fmt(c.total, 0)} of ${fmt(c.target, 0)} mL → <b>${c.remaining < 0 ? 'over by ' + fmt(-c.remaining, 0) : fmt(c.remaining, 0) + ' remaining'}</b>${c.meds.filter((m) => m.name).length ? ` (${c.meds.filter((m) => m.name).map((m) => `${h(m.name)} ${fmt(m.total, 0)} mL`).join(', ')})` : ''}</div>`;
+}
+function updateFluidLive(form, d, items) {
+  const c = fluidCalc(d, items);
+  form.querySelectorAll('.medrow').forEach((row) => {
+    const ml = +row.querySelector('[name$=".ml"]').value || 0, n = +row.querySelector('[name$=".doses"]').value || 0;
+    row.querySelector('.medtot').textContent = ml && n ? `= ${fmt(ml * n, 0)} mL/day` : '';
+  });
+  const [cls, msg] = fluidStatus(c);
+  form.querySelector('#fluidBalance').innerHTML = `<table class="tbl compact"><tbody>
+    <tr><td>Maintenance fluid (prescription)</td><td><b>${fmt(c.target, 0)} mL</b></td></tr>
+    <tr><td>− Medications</td><td>${fmt(c.medTotal, 0)} mL</td></tr>
+    <tr><td>− IV fluids</td><td>${fmt(c.iv, 0)} mL</td></tr>
+    <tr><td>− Other fluids</td><td>${fmt(c.other, 0)} mL</td></tr>
+    <tr><td>− Formula volume</td><td>${fmt(c.formula, 0)} mL</td></tr>
+    <tr><td><b>Remaining</b></td><td class="${c.remaining < 0 ? 'high' : ''}"><b>${fmt(c.remaining, 0)} mL</b></td></tr></tbody></table>
+    <div class="alert ${cls}">${msg}</div>`;
+}
+
 function tabFollowup(p, fid) {
   const list = (p.followUps || []).slice().sort(byDate).reverse();
   if (fid) return fuForm(p, fid === 'new' ? null : list.find((x) => x.id === fid));
   const cards = list.map((f) => {
     const t = f.regimen?.items?.length ? regimenTotals(f.regimen.items) : null;
-    const abn = LABS.filter(([k]) => labFlag(k, f.labs?.[k])).map(([k, l]) => `<span class="pill ${labFlag(k, f.labs[k]) === 'high' ? 'bad' : 'warn'}">${l} ${f.labs[k]}</span>`).join(' ');
+    const abn = LABS.filter(([k]) => labFlag(k, f.labs?.[k])).map(([k, l]) => `<span class="pill ${labFlag(k, f.labs[k]) === 'high' ? 'bad' : 'low'}">${l} ${f.labs[k]} ${flagText(labFlag(k, f.labs[k]))}</span>`).join(' ');
     return `<div class="card fu"><div class="row between"><h3>${fdate(f.date)}</h3><div class="no-print"><a class="btn sm ghost" href="#/p/${p.id}/followup/${f.id}">Open</a></div></div>
       <div class="small">${f.oralDiet ? `<b>Oral diet:</b> ${h(f.oralDiet)} · ` : ''}${f.tubeType ? `<b>Tube:</b> ${h(f.tubeType)} · ` : ''}${t ? `<b>Formula:</b> ${f.regimen.items.map((i) => `${h(formulaById(i.id)?.name)} × ${fmt(i.servings)}`).join(', ')} = ${fmt(t.kcal, 0)} kcal / ${fmt(t.protein)} g` : ''}</div>
       ${f.events ? `<p class="small" dir="auto"><b>Events:</b> ${nl2br(f.events)}</p>` : ''}
@@ -606,12 +717,20 @@ function fuForm(p, f) {
     <div id="regTotals"></div>
     ${fld('Parenteral / IV notes (free text)', 'parenteral', f.parenteral, { type: 'textarea', rows: 2 })}
   </div>
+  <div class="card"><h3>Fluid balance: hydration from medications</h3>
+    <p class="small muted">Fluids already given with medications, IV fluids and formula are taken away from the maintenance fluid, so you can see how much is left to give.</p>
+    <div id="medRows">${(f.meds?.length ? f.meds : [{}]).map((m) => medRow(m)).join('')}</div>
+    <button type="button" class="btn sm ghost" data-action="addMedRow">+ Add medication</button>
+    <div class="g3">${fld('IV fluids (not medications)', 'fluidIn.iv', f.fluidIn?.iv, { type: 'number', unit: 'mL/day' })}
+      ${fld('Other fluids (flushes, free water…)', 'fluidIn.other', f.fluidIn?.other, { type: 'number', unit: 'mL/day' })}
+      ${fld('Count formula volume', 'fluidIn.noFormula', f.fluidIn?.noFormula ?? '', { type: 'select', options: [['', 'Yes, include formula volume'], ['1', 'No, do not include']] })}</div>
+    <div id="fluidBalance"></div></div>
   <div class="card"><h3>New events and interventions</h3>
     ${fld('Events / interventions / medications', 'events', f.events, { type: 'textarea', rows: 4 })}
     ${fld('To follow', 'toFollow', f.toFollow, { type: 'textarea', rows: 2 })}</div>
   <div class="card"><h3>Vitals & balance</h3><div class="g5">${VITALS.map(([k, l, u]) => fld(l, `vitals.${k}`, f.vitals?.[k], { unit: u })).join('')}</div></div>
   <div class="card"><h3>Laboratory results</h3><div class="g5 labsgrid">
-    ${LABS.map(([k, l, u, lo, hi]) => `<label class="fld lab"><span>${l} <em>${u}</em></span><input type="number" step="any" inputmode="decimal" name="labs.${k}" value="${h(f.labs?.[k] ?? '')}" class="${labFlag(k, f.labs?.[k])}"><small class="muted">${lo != null || hi != null ? `${lo ?? ''}–${hi ?? ''}` : ''}</small></label>`).join('')}
+    ${LABS.map(([k, l, u, lo, hi]) => `<label class="fld lab"><span>${l} <em>${u}</em></span><input type="number" step="any" inputmode="decimal" name="labs.${k}" value="${h(f.labs?.[k] ?? '')}" class="${labFlag(k, f.labs?.[k])}"><small class="muted">${lo != null || hi != null ? `${lo ?? ''}–${hi ?? ''}` : ''} <b class="flagtxt ${labFlag(k, f.labs?.[k])}">${flagText(labFlag(k, f.labs?.[k]))}</b></small></label>`).join('')}
   </div></div>
   <div class="savebar no-print"><button class="btn">Save follow-up</button><a class="btn ghost" href="#/p/${p.id}/followup">Cancel</a>
   ${isNew ? '' : `<button type="button" class="btn danger ghost right" data-action="deleteItem" data-kind="followUps" data-pid="${p.id}" data-iid="${f.id}">Delete</button>`}</div>
@@ -683,7 +802,7 @@ function reportHTML(p, sel) {
         <tr><th>Wt/age z</th><td>${fmt(r.z.wfa, 2)}</td><th>Ht/age z · BMI/age z</th><td>${fmt(r.z.hfa, 2)} · ${fmt(r.z.bfa, 2)}</td></tr>
         <tr><th>REE</th><td colspan="3">${r.energy.ree ? `${h(r.energy.ree.text)} = ${fmt(r.energy.ree.value)} kcal (wt ${fmt(r.energy.weight)} kg)` : '—'}</td></tr>
         <tr><th>TEE</th><td colspan="3">REE × ${fmt(r.energy.activity, 2)} × ${fmt(r.energy.stress, 2)} = ${fmt(r.energy.teeCalc, 0)} kcal${r.energy.overridden ? ` (final ${fmt(r.energy.tee, 0)})` : ''}</td></tr>
-        <tr><th>Protein</th><td colspan="3">${fmt(r.protein.gkg, 2)} g/kg × ${fmt(r.protein.weight)} kg = ${fmt(r.protein.calc)} g${r.protein.overridden ? ` (final ${fmt(r.protein.value)})` : ''} · ${h(r.protein.guide?.label || '')}</td></tr>
+        <tr><th>Protein</th><td colspan="3">${fmt(r.protein.gkg, 2)} g/kg × ${fmt(r.protein.weight)} kg = ${fmt(r.protein.calc)} g${r.protein.overridden ? ` (final ${fmt(r.protein.value)})` : ''} · range ${fmt(r.protein.min)}–${fmt(r.protein.max)} g/day (${h(r.protein.guide?.label || '')}: ${fmt(r.protein.guide?.min, 2)}–${fmt(r.protein.guide?.max, 2)} g/kg)</td></tr>
         <tr><th>Fluid</th><td colspan="3">Holliday–Segar (${fmt(r.fluid.weight)} kg) × ${fmt(r.fluid.percent, 0)}% = ${fmt(r.fluid.calc, 0)} mL${r.fluid.overridden ? ` (final ${fmt(r.fluid.value, 0)})` : ''} · ${fmt(r.fluid.perHour, 0)} mL/h</td></tr>
         ${cn.length ? `<tr><th>Concerns</th><td colspan="3">${h(cn.join(', '))}</td></tr>` : ''}
         ${la.dietOrder ? `<tr><th>Diet order</th><td colspan="3" dir="auto">${nl2br(la.dietOrder)}</td></tr>` : ''}
@@ -698,7 +817,7 @@ function reportHTML(p, sel) {
     if (it.length && r) {
       s += `<table class="tbl compact"><thead><tr><th>Product</th><th>Servings/day</th><th>Scoops/day</th><th>Volume</th><th>kcal</th><th>Protein</th></tr></thead><tbody>
       ${it.map((i) => { const f = formulaById(i.id); if (!f) return ''; const n = +i.servings || 0; return `<tr><td>${h(f.name)}</td><td>${fmt(n)}</td><td>${f.scoops ? fmt(f.scoops * n, 0) : '—'}</td><td>${f.volume ? fmt(f.volume * n, 0) + ' mL' : '—'}</td><td>${fmt(f.kcal * n, 0)}</td><td>${fmt(f.protein * n)} g</td></tr>`; }).join('')}</tbody></table>
-      ${regimenTotalsHTML(it, r)}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
+      ${regimenTotalsHTML(it, r, latestLabs(p))}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
     } else s += '<p class="muted">No regimen saved.</p>';
     s += '</section>';
   }
@@ -718,6 +837,7 @@ function reportHTML(p, sel) {
       return `<div class="rep-fu"><b>${fdate(f.date)}</b>${f.weight ? ` · Wt ${fmt(f.weight)} kg` : ''} · Rx: ${fmt(f.rx?.kcal, 0)} kcal, ${fmt(f.rx?.fluid, 0)} mL, ${fmt(f.rx?.protein)} g protein
       <div class="small">${f.oralDiet ? 'Oral: ' + h(f.oralDiet) + ' · ' : ''}${f.tubeType ? 'Tube: ' + h(f.tubeType) + ' · ' : ''}${t ? `Formula: ${f.regimen.items.map((i) => `${h(formulaById(i.id)?.name)} × ${fmt(i.servings)}`).join(', ')} (${fmt(t.kcal, 0)} kcal / ${fmt(t.protein)} g)` : ''}</div>
       ${f.feedingNotes ? `<div class="small" dir="auto">${nl2br(f.feedingNotes)}</div>` : ''}${f.parenteral ? `<div class="small" dir="auto">IV: ${nl2br(f.parenteral)}</div>` : ''}
+      ${fluidSummaryText(f)}
       ${f.events ? `<div class="small" dir="auto">Events: ${nl2br(f.events)}</div>` : ''}${f.toFollow ? `<div class="small" dir="auto">To follow: ${nl2br(f.toFollow)}</div>` : ''}
       <div class="small">${VITALS.filter(([k]) => f.vitals?.[k]).map(([k, l]) => `${l}: ${h(f.vitals[k])}`).join(' · ')}</div></div>`; }).join('') || '<p class="muted">No follow-ups.</p>'}
       ${list.length ? '<h4>Lab trends</h4>' + labTrendTable(p) : ''}</section>`;
@@ -735,11 +855,40 @@ function reportHTML(p, sel) {
 // =====================================================================
 //  FORMULAS + SETTINGS pages
 // =====================================================================
-function viewFormulas() {
-  return `<div class="card"><h2>Oral formula list</h2><p class="small muted">From Nutrition.pdf. IV products are not included yet. To change this list edit <code>js/formulas.js</code>.</p>
-    <div class="tablewrap"><table class="tbl"><thead><tr><th>ONS</th><th>Age gp.</th><th>Serv. size</th><th>Dilution</th><th>kcal</th><th>Protein (g)</th><th>g protein / 100 kcal</th><th>Note</th></tr></thead><tbody>
-    ${FORMULAS.map((f) => `<tr><td><b>${h(f.name)}</b></td><td>${h(f.age)}</td><td>${f.scoops ? f.scoops + ' scoops' : '—'}</td><td>${f.volume ? f.volume + ' mL' : '—'}</td><td>${f.kcal}</td><td>${f.protein}</td><td>${fmt((f.protein / f.kcal) * 100)}</td><td class="small">${h(f.note)}</td></tr>`).join('')}
-    </tbody></table></div></div>`;
+function viewFormulas(parts = []) {
+  const list = formulas();
+  if (parts[1] === 'edit' || parts[1] === 'new') {
+    const f = parts[1] === 'new' ? { id: '', name: '', minAge: 1, maxAge: 99, type: 'complete' } : list.find((x) => x.id === parts[2]);
+    if (!f) return '<div class="card">Product not found. <a href="#/formulas">Back</a></div>';
+    return `<form id="formulaForm" class="card" data-id="${h(f.id)}"><h2>${f.id ? 'Edit ' + h(f.name) : 'Add product'}</h2>
+      <div class="g3">${fld('Product name', 'name', f.name, { req: true })}
+      ${fld('Type', 'type', f.type, { type: 'select', options: [['complete', 'Complete formula'], ['module', 'Add-on module']] })}
+      ${fld('Note', 'note', f.note)}
+      ${fld('Minimum age', 'minAge', f.minAge, { type: 'number', unit: 'years', req: true })}
+      ${fld('Maximum age', 'maxAge', f.maxAge, { type: 'number', unit: 'years (99 = no limit)', req: true })}
+      <span></span>
+      ${fld('Scoops per serving', 'scoops', f.scoops, { type: 'number' })}
+      ${fld('Volume per serving', 'volume', f.volume, { type: 'number', unit: 'mL' })}
+      <span></span>
+      ${fld('Energy per serving', 'kcal', f.kcal, { type: 'number', unit: 'kcal', req: true })}
+      ${fld('Protein per serving', 'protein', f.protein, { type: 'number', unit: 'g', req: true })}</div>
+      <h4>Electrolytes per serving (mg) — copy from the label</h4>
+      <div class="g5">${ELECTROLYTES.map(([k, l]) => fld(l, k, f[k], { type: 'number', unit: 'mg' })).join('')}</div>
+      ${fld('Source of the values', 'source', f.source, { placeholder: 'e.g. label of the can, 2026' })}
+      <p class="small muted">Labels often give values per 100 g powder or per 100 mL. Multiply by the grams or mL in one serving. Example: 310 mg Na per 100 g × 55 g per serving = 170 mg.</p>
+      <div class="row gap"><button class="btn">Save product</button><a class="btn ghost" href="#/formulas">Cancel</a>
+      ${f.id ? `<button type="button" class="btn danger ghost right" data-action="deleteFormula" data-id="${h(f.id)}">Delete product</button>` : ''}</div></form>`;
+  }
+  const v = (x) => (x === null || x === undefined || x === '' ? '<span class="muted">?</span>' : h(x));
+  return `<div class="card"><div class="row between"><h2>Oral formula list</h2>
+    <div class="row gap"><a class="btn sm" href="#/formulas/new">+ Add product</a>${isCustomized() ? '<button class="btn sm ghost" data-action="resetFormulas">Reset to original list</button>' : ''}</div></div>
+    <p class="small muted">Tap <b>Edit</b> to change a product or add its electrolytes from the label. ${store.mode === 'cloud' ? 'Changes are saved to your account and appear on all your devices.' : 'Changes are saved on this device.'} IV products are not included yet. "?" = not entered yet.</p>
+    <div class="tablewrap"><table class="tbl"><thead><tr><th>ONS</th><th>Age gp.</th><th>Serving</th><th>kcal</th><th>Protein (g)</th><th>g ptn / 100 kcal</th>${ELECTROLYTES.map(([, l]) => `<th>${l} mg</th>`).join('')}<th>Source / note</th><th></th></tr></thead><tbody>
+    ${list.map((f) => `<tr><td><b>${h(f.name)}</b>${f.type === 'module' ? ' <span class="pill">module</span>' : ''}</td><td>${h(ageLabel(f))}</td><td>${f.scoops ? f.scoops + ' scoops' : ''}${f.scoops && f.volume ? ' / ' : ''}${f.volume ? f.volume + ' mL' : ''}${!f.scoops && !f.volume ? '—' : ''}</td><td>${f.kcal}</td><td>${f.protein}</td><td>${fmt((f.protein / f.kcal) * 100)}</td>
+      ${ELECTROLYTES.map(([k]) => `<td>${v(f[k])}</td>`).join('')}<td class="small">${h(f.source || '')}${f.source && f.note ? ' · ' : ''}${h(f.note || '')}</td>
+      <td><a class="btn sm ghost" href="#/formulas/edit/${h(f.id)}">Edit</a></td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="small muted">Pre-filled electrolytes come from manufacturer data sheets of other countries (Nestlé UK, Nestlé Singapore, Fresenius Kabi) and are scaled to your serving sizes. Check them against your local label.</p></div>`;
 }
 function viewSettings() {
   return `<div class="card"><h2>Settings</h2>
@@ -768,7 +917,10 @@ document.addEventListener('input', (ev) => {
   if (t.closest('#assessForm')) updateAssessLive();
   if (t.closest('#pymsForm')) updatePymsLive(['weight', 'height', 'date'].includes(t.name));
   if (t.closest('#regimenForm') || t.closest('#fuForm')) updateRegimenLive();
-  if (t.closest('#fuForm') && t.name?.startsWith('labs.')) t.className = labFlag(t.name.slice(5), t.value);
+  if (t.closest('#fuForm') && t.name?.startsWith('labs.')) {
+    const fl = labFlag(t.name.slice(5), t.value); t.className = fl;
+    const ft = t.parentElement.querySelector('.flagtxt'); if (ft) { ft.className = 'flagtxt ' + fl; ft.textContent = flagText(fl); }
+  }
 });
 document.addEventListener('change', (ev) => {
   const t = ev.target;
@@ -778,6 +930,11 @@ document.addEventListener('change', (ev) => {
     const p = getP(route().parts[1]); $('#report').innerHTML = reportHTML(p, settings.printSections);
   }
   if (t.id === 'importFile' && t.files[0]) importBackup(t.files[0]);
+  if (t.closest('#assessForm') && ['protein.renal', 'protein.guideline', 'protein.restrictMax'].includes(t.name)) {
+    // when the protein range changes, move the chosen g/kg to the top of the new range
+    const form = t.closest('form'); const r = C.computeAssessment(getP(form.dataset.pid), { ...readForm(form), protein: { ...readForm(form).protein, gPerKg: '' } });
+    if (r.protein.guide) form.querySelector('[name="protein.gPerKg"]').value = +r.protein.guide.max.toFixed(2);
+  }
   if (t.closest('#assessForm')) updateAssessLive();
   if (t.closest('#pymsForm')) updatePymsLive(false);
   if (t.closest('#regimenForm') || t.closest('#fuForm')) updateRegimenLive();
@@ -791,6 +948,16 @@ document.addEventListener('submit', async (ev) => {
     try { act === 'up' ? await store.signUp(d.email, d.password) : await store.signIn(d.email, d.password); }
     catch (e) { alert(e.message.replace('Firebase: ', '')); }
     return;
+  }
+  if (form.id === 'formulaForm') {
+    const list = JSON.parse(JSON.stringify(formulas()));
+    const numK = ['minAge', 'maxAge', 'scoops', 'volume', 'kcal', 'protein', ...ELECTROLYTES.map((e) => e[0])];
+    numK.forEach((k) => { d[k] = d[k] === '' ? null : +d[k]; });
+    const id = form.dataset.id || d.name.toLowerCase().replace(/[^a-z0-9]+/g, '') + '-' + newId().slice(-4);
+    const i = list.findIndex((x) => x.id === id);
+    const item = { ...(i >= 0 ? list[i] : {}), ...d, id };
+    if (i >= 0) list[i] = item; else list.push(item);
+    saveFormulas(list, 'Product saved'); go('#/formulas'); return;
   }
   if (form.id === 'settingsForm') { Object.assign(settings, d); saveSettings(); toast('Settings saved'); return; }
   if (form.id === 'patientForm') {
@@ -817,6 +984,7 @@ document.addEventListener('submit', async (ev) => {
     upsert('pyms', d); savePatient(p, 'PYMS saved'); go(`#/p/${pid}/pyms`);
   } else if (form.id === 'fuForm') {
     d.id = form.dataset.fid; d.regimen = { items: normItems(d.regimen?.items) };
+    d.meds = Object.values(d.meds || {}).filter((m) => m.name || m.ml);
     upsert('followUps', d); savePatient(p, 'Follow-up saved'); go(`#/p/${pid}/followup`);
   } else if (form.id === 'dischargeForm') {
     const mark = d.markDischarged; delete d.markDischarged;
@@ -842,6 +1010,8 @@ const actions = {
     go(`#/p/${p.id}/${{ assessments: 'assessment', pyms: 'pyms', followUps: 'followup' }[el.dataset.kind]}`);
   },
   addRegRow: () => { $('#regRows').insertAdjacentHTML('beforeend', regimenRow()); },
+  addMedRow: () => { $('#medRows').insertAdjacentHTML('beforeend', medRow()); },
+  rmMed: (el) => { el.closest('.medrow').remove(); updateRegimenLive(); },
   rmRow: (el) => { el.closest('.regrow').remove(); updateRegimenLive(); },
   useFormula: (el) => {
     const rows = $('#regRows'); rows.innerHTML = regimenRow({ id: el.dataset.fid, servings: +el.dataset.serv });
@@ -854,6 +1024,14 @@ const actions = {
       return `${f.name}: ${fmt(n)} servings/day${f.scoops ? ` (${f.scoops} scoops in ${f.volume} mL water each = ${fmt(f.scoops * n, 0)} scoops/day)` : ''} → ${fmt(f.kcal * n, 0)} kcal, ${fmt(f.protein * n)} g protein`; }).filter(Boolean).join('\n') || ta.value;
   },
   print: () => window.print(),
+  deleteFormula: async (el) => {
+    if (!(await askConfirm('Delete this product from the list?'))) return;
+    saveFormulas(formulas().filter((f) => f.id !== el.dataset.id), 'Product deleted'); go('#/formulas');
+  },
+  resetFormulas: async () => {
+    if (!(await askConfirm('Go back to the original formula list? Your edits will be removed.', 'Reset'))) return;
+    saveFormulas(null, 'Original list restored'); render();
+  },
   export: () => {
     const blob = new Blob([JSON.stringify({ exported: new Date().toISOString(), patients: state.patients }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `nutrition-backup-${today()}.json`; a.click();
@@ -876,10 +1054,12 @@ async function importBackup(file) {
 // =====================================================================
 //  START
 // =====================================================================
-let unsub = null;
+let unsub = null, unsubMeta = null;
 store.init((user) => {
   state.user = user; state.ready = true;
   if (unsub) unsub();
+  if (unsubMeta) unsubMeta();
+  unsubMeta = store.subscribeMeta('formulas', (list) => { setCustomFormulas(list); if (!state.dirty && state.ready) render(); });
   unsub = store.subscribe((list) => {
     state.patients = list;
     if (!state.dirty) render();
