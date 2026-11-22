@@ -57,6 +57,18 @@ function toast(msg) {
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
+function askConfirm(msg, ok = 'Delete') {
+  return new Promise((res) => {
+    const d = document.createElement('div'); d.className = 'modal';
+    d.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true"><p>${h(msg)}</p><div class="row gap"><button class="btn danger" data-ok>${h(ok)}</button><button class="btn ghost" data-no>Cancel</button></div></div>`;
+    document.body.append(d); d.querySelector('[data-no]').focus();
+    d.addEventListener('click', (e) => {
+      if (e.target.closest('[data-ok]')) { d.remove(); res(true); }
+      else if (e.target.closest('[data-no]') || e.target === d) { d.remove(); res(false); }
+    });
+  });
+}
+
 // ---------------- settings (per device) ----------------
 const SETTINGS_KEY = 'pn_settings_v1';
 const settings = (() => { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; } })();
@@ -816,14 +828,14 @@ document.addEventListener('submit', async (ev) => {
 const actions = {
   signout: () => store.signOut(),
   reset: async () => { const email = prompt('Enter your email to reset the password:'); if (email) { try { await store.reset(email); alert('Reset email sent.'); } catch (e) { alert(e.message); } } },
-  deletePatient: (el) => {
+  deletePatient: async (el) => {
     const p = getP(el.dataset.id);
-    if (!confirm(`Delete the whole file of "${p.name}"? This cannot be undone.`)) return;
+    if (!(await askConfirm(`Delete the whole file of "${p.name}"? This cannot be undone.`))) return;
     state.patients = state.patients.filter((x) => x.id !== p.id);
     store.remove(p.id).catch((e) => alert(e.message)); go('#/');
   },
-  deleteItem: (el) => {
-    if (!confirm('Delete this entry?')) return;
+  deleteItem: async (el) => {
+    if (!(await askConfirm('Delete this entry?'))) return;
     const p = JSON.parse(JSON.stringify(getP(el.dataset.pid)));
     p[el.dataset.kind] = (p[el.dataset.kind] || []).filter((x) => x.id !== el.dataset.iid);
     savePatient(p, 'Deleted');
@@ -855,7 +867,7 @@ async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
     const list = data.patients || [];
-    if (!confirm(`Import ${list.length} patient file(s)? Files with the same ID will be replaced.`)) return;
+    if (!(await askConfirm(`Import ${list.length} patient file(s)? Files with the same ID will be replaced.`, 'Import'))) return;
     for (const p of list) await store.save(p);
     toast('Imported'); render();
   } catch (e) { alert('Import failed: ' + e.message); }
