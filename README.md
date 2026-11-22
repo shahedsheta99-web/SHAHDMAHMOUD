@@ -39,12 +39,15 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 
 ## Step 1: Put the app online (free, with GitHub Pages)
 
-1. On GitHub, merge this branch into `main` (open a Pull Request and click **Merge**).
-2. Go to the repository's **Settings → Pages**. Under **Source**, choose **GitHub Actions**.
-3. Wait about 1 minute. The app will be at
-   `https://<your-github-username>.github.io/<repository-name>/`.
-   (On a free GitHub plan the repository must be **public** for Pages. The app's code
+1. Make sure the app files are on the `main` branch.
+2. Make the repository **public**: **Settings → General → Danger Zone → Change visibility**.
+   (On a free GitHub plan the repository must be public for Pages. The app's code
    has no patient data in it; patient data lives only in each user's account.)
+3. Go to **Settings → Pages**. Under **Build and deployment → Source**, choose
+   **Deploy from a branch**, then set **Branch** to `main` and the folder to `/ (root)`, and click **Save**.
+4. Wait 1–2 minutes. The app will be at
+   `https://<your-github-username>.github.io/<repository-name>/`
+   (for this repository: https://shahedsheta99-web.github.io/SHAHDMAHMOUD/).
 
 Every time `main` changes, the site updates automatically, so **every device gets the new version**.
 
