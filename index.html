@@ -26,6 +26,27 @@
   </header>
   <main id="app"><div class="center muted">Loading…</div></main>
   <div id="toast" role="status" aria-live="polite"></div>
+  <script>
+    // Safety net: if the app has not started after 8 seconds (or a script fails),
+    // offer a repair button that clears the saved app files. Patient data is NOT deleted.
+    (function () {
+      function show(msg) {
+        if (window.__pnStarted || document.getElementById('pnRescue')) return;
+        var d = document.createElement('div'); d.id = 'pnRescue';
+        d.style.cssText = 'max-width:420px;margin:2rem auto;padding:16px;border:1px solid #b91c1c;border-radius:12px;background:#fee2e2;color:#7f1d1d;font:15px system-ui,sans-serif';
+        d.innerHTML = '<b>The app could not start.</b><p>' + msg + '</p><p>Your patient files are safe. Tap the button to download the newest version.</p>' +
+          '<button id="pnRepair" style="padding:.6rem 1rem;border-radius:9px;border:0;background:#0f766e;color:#fff;font-weight:700">Repair and reload</button>';
+        var app = document.getElementById('app'); app.innerHTML = ''; app.appendChild(d);
+        document.getElementById('pnRepair').onclick = async function () {
+          try { if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch (e) {}
+          try { if (window.caches) for (const k of await caches.keys()) await caches.delete(k); } catch (e) {}
+          location.reload();
+        };
+      }
+      window.addEventListener('error', function (e) { if (!window.__pnStarted) setTimeout(function () { show('(' + (e.message || 'a file failed to load') + ')'); }, 1500); }, true);
+      setTimeout(function () { show('It took too long to load.'); }, 8000);
+    })();
+  </script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

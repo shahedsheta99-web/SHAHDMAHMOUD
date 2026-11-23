@@ -1263,6 +1263,14 @@ store.init((user) => {
   render();
 }).catch((e) => { state.ready = true; $('#app').innerHTML = `<div class="card bad">Could not start: ${h(e.message)}</div>`; });
 
+window.__pnStarted = true;
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
+  try {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => reg.update()).catch(() => {});
+    // When a new version of the app takes over, reload once so every file is the new one.
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded || state.dirty) return; reloaded = true; location.reload();
+    });
+  } catch {}
 }
