@@ -203,8 +203,8 @@ function viewPatientForm(p, isNew) {
 }
 
 // ---------------- patient page with tabs ----------------
-const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['formula', 'Formula'], ['tpn', 'TPN'], ['growth', 'Growth'],
-  ['pyms', 'PYMS'], ['followup', 'Follow-up'], ['discharge', 'Discharge'], ['print', 'Print']];
+const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['pyms', 'PYMS'], ['formula', 'Formula'], ['tpn', 'TPN'],
+  ['growth', 'Growth'], ['followup', 'Follow-up'], ['discharge', 'Discharge'], ['print', 'Print']];
 
 function viewPatient(p, tab, rest) {
   const a = C.ageAt(p.dob);
@@ -430,10 +430,22 @@ function lyteLabStatus(labs) {
 }
 const labName = (lk) => LABS.find((l) => l[0] === lk);
 
+// Part of the needs given by oral formula: energy and protein scaled by % of TEE (fluid unchanged).
+function oralTarget(r, pct) {
+  const f = (+pct || 100) / 100;
+  const sc = (x) => (x == null ? null : x * f);
+  return { ...r, oralPct: +pct || 100, full: r,
+    energy: { ...r.energy, tee: sc(r.energy.tee), perKg: sc(r.energy.perKg) },
+    protein: { ...r.protein, value: sc(r.protein.value), min: sc(r.protein.min), max: sc(r.protein.max), gkg: sc(r.protein.gkg) } };
+}
+const regimenPct = (a) => a?.regimen?.teePct || 100;
+
 function tabFormula(p) {
   const a = latest(p.assessments);
   if (!a) return `<div class="card">Complete an <a href="#/p/${p.id}/assessment">assessment</a> first so the app knows the patient's needs.</div>`;
-  const r = C.computeAssessment(p, a);
+  const pct = state.oralPct?.[p.id] ?? regimenPct(a);
+  const rFull = C.computeAssessment(p, a);
+  const r = oralTarget(rFull, pct);
   const kcal = r.energy.tee, ptn = r.protein.value;
   const labs = latestLabs(p); const status = lyteLabStatus(labs);
   const recs = recommendFormulas(r.ageY, kcal, ptn, r.protein.min, r.protein.max, status);
@@ -450,7 +462,10 @@ function tabFormula(p) {
       <td><button type="button" class="btn sm ghost" data-action="useFormula" data-fid="${f.id}" data-serv="${ev.servings.toFixed(1)}">Use</button></td></tr>`).join('');
   const others = formulas().filter((f) => !recs.some((x) => x.f.id === f.id));
   const abn = Object.entries(status);
-  return `<div class="card"><h3>Targets from assessment of ${fdate(a.date)}</h3>${needsCard(r)}
+  return `<div class="card"><h3>Targets from assessment of ${fdate(a.date)}</h3>
+    <div class="row gap wrap end"><label class="fld big" style="max-width:220px"><span>% of TEE from oral formula <em>%</em></span><input type="number" id="oralPct" step="any" inputmode="decimal" value="${h(pct)}"></label>
+      <p class="small muted">Full needs: ${fmt(rFull.energy.tee, 0)} kcal · protein ${fmt(rFull.protein.min)}–${fmt(rFull.protein.max)} g. ${+pct < 100 ? `The other ${fmt(100 - pct, 0)}% (${fmt(rFull.energy.tee - kcal, 0)} kcal) comes from other sources (oral diet, TPN).` : ''}</p></div>
+    <h4>Formula target (${fmt(pct, 0)}% of TEE)</h4>${needsCard(r)}
     <p class="small muted">Age ${C.ageText(r.age)}. Products are filtered by age group. Products whose protein falls inside the protein range (${fmt(r.protein.min)}–${fmt(r.protein.max)} g) when they give the full energy need rank first${abn.length ? ', then those with the least of the electrolytes that are high in the labs' : ''}.</p>
     ${abn.length ? `<div class="alert ${abn.some(([, v]) => v === 'high') ? 'bad' : 'warn'}"><b>Abnormal electrolytes in the latest labs:</b> ${abn.map(([k, v]) => { const lk = ELECTROLYTES.find((e) => e[0] === k)[2]; return `${labName(lk)[1]} ${labs[lk].v} ${labName(lk)[2]} (${v === 'high' ? 'HIGH ↑' : 'LOW ↓'}, ${labs[lk].date === 'this sheet' ? '' : fdate(labs[lk].date)})`; }).join(' · ')}. The ranking prefers formulas with ${abn.map(([k, v]) => `${v === 'high' ? 'less' : 'more'} ${ELECTROLYTES.find((e) => e[0] === k)[1]}`).join(', ')}.</div>` : ''}
   </div>
@@ -462,6 +477,7 @@ function tabFormula(p) {
     <ul class="small">${others.map((f) => `<li>${h(f.name)}: ${h(ageLabel(f))}, ${f.kcal} kcal, ${f.protein} g protein ${f.type === 'module' ? '(add-on module)' : ''} ${fitsAge(f, r.ageY) ? '' : '<span class="muted">not for this age</span>'}</li>`).join('')}</ul></details>
   </div>
   <form id="regimenForm" class="card" data-pid="${p.id}" data-aid="${a.id}"><h3>Prescribed regimen</h3>
+    <input type="hidden" name="regimen.teePct" value="${h(pct)}">
     <div id="regRows">${items.map((it) => regimenRow(it)).join('')}</div>
     <button type="button" class="btn sm ghost" data-action="addRegRow">+ Add product</button>
     <div class="g3">
@@ -518,7 +534,8 @@ function updateRegimenLive() {
   const d = readForm(form);
   const items = normItems(d.regimen?.items);
   const box = form.querySelector('#regTotals');
-  if (box) box.innerHTML = a ? regimenTotalsHTML(items, C.computeAssessment(p, a), latestLabs(p, form.id === 'fuForm' ? d.labs : null)) : '';
+  const pct = form.id === 'regimenForm' ? d.regimen?.teePct : regimenPct(a);
+  if (box) box.innerHTML = a ? regimenTotalsHTML(items, oralTarget(C.computeAssessment(p, a), pct), latestLabs(p, form.id === 'fuForm' ? d.labs : null)) : '';
   if (form.id === 'fuForm') updateFluidLive(form, d, items);
 }
 
@@ -933,7 +950,7 @@ function tabDischarge(p) {
 // =====================================================================
 //  PRINT / REPORTS
 // =====================================================================
-const SECTIONS = [['assessment', 'Assessment & requirements'], ['formula', 'Formula regimen'], ['tpn', 'TPN order'], ['growth', 'Growth charts'], ['pyms', 'PYMS'], ['followup', 'Follow-ups & labs'], ['discharge', 'Discharge summary']];
+const SECTIONS = [['assessment', 'Assessment & requirements'], ['pyms', 'PYMS'], ['formula', 'Formula regimen'], ['tpn', 'TPN order'], ['growth', 'Growth charts'], ['followup', 'Follow-ups & labs'], ['discharge', 'Discharge summary']];
 function tabPrint(p, only) {
   const sel = only ? [only] : (settings.printSections || SECTIONS.map((s) => s[0]));
   return `<div class="card no-print"><h3>Print / save as PDF</h3>
@@ -975,7 +992,7 @@ function reportHTML(p, sel) {
     if (it.length && r) {
       s += `<table class="tbl compact"><thead><tr><th>Product</th><th>Servings/day</th><th>Scoops/day</th><th>Volume</th><th>kcal</th><th>Protein</th></tr></thead><tbody>
       ${it.map((i) => { const f = formulaById(i.id); if (!f) return ''; const n = +i.servings || 0; return `<tr><td>${h(f.name)}</td><td>${fmt(n)}</td><td>${f.scoops ? fmt(f.scoops * n, 0) : '—'}</td><td>${f.volume ? fmt(f.volume * n, 0) + ' mL' : '—'}</td><td>${fmt(f.kcal * n, 0)}</td><td>${fmt(f.protein * n)} g</td></tr>`; }).join('')}</tbody></table>
-      ${regimenTotalsHTML(it, r, latestLabs(p))}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
+      <p class="small">Oral formula target: ${fmt(regimenPct(la), 0)}% of TEE</p>${regimenTotalsHTML(it, oralTarget(r, regimenPct(la)), latestLabs(p))}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
     } else s += '<p class="muted">No regimen saved.</p>';
     s += '</section>';
   }
@@ -1091,6 +1108,7 @@ document.addEventListener('input', (ev) => {
 document.addEventListener('change', (ev) => {
   const t = ev.target;
   if (t.id === 'filter') { settings.filter = t.value; saveSettings(); render(); }
+  if (t.id === 'oralPct') { state.oralPct = state.oralPct || {}; state.oralPct[route().parts[1]] = +t.value || 100; render(); return; }
   if (t.classList.contains('psec')) {
     settings.printSections = [...document.querySelectorAll('.psec:checked')].map((x) => x.value); saveSettings();
     const p = getP(route().parts[1]); $('#report').innerHTML = reportHTML(p, settings.printSections);
