@@ -203,8 +203,8 @@ function viewPatientForm(p, isNew) {
 }
 
 // ---------------- patient page with tabs ----------------
-const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['pyms', 'PYMS'], ['formula', 'Formula'], ['tpn', 'TPN'],
-  ['growth', 'Growth'], ['followup', 'Follow-up'], ['discharge', 'Discharge'], ['print', 'Print']];
+const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['pyms', 'PYMS'], ['growth', 'Growth'], ['formula', 'Formula'],
+  ['followup', 'Follow-up'], ['tpn', 'TPN'], ['discharge', 'Discharge'], ['print', 'Print']];
 
 function viewPatient(p, tab, rest) {
   const a = C.ageAt(p.dob);
@@ -950,7 +950,7 @@ function tabDischarge(p) {
 // =====================================================================
 //  PRINT / REPORTS
 // =====================================================================
-const SECTIONS = [['assessment', 'Assessment & requirements'], ['pyms', 'PYMS'], ['formula', 'Formula regimen'], ['tpn', 'TPN order'], ['growth', 'Growth charts'], ['followup', 'Follow-ups & labs'], ['discharge', 'Discharge summary']];
+const SECTIONS = [['assessment', 'Assessment & requirements'], ['pyms', 'PYMS'], ['growth', 'Growth charts'], ['formula', 'Formula regimen'], ['followup', 'Follow-ups & labs'], ['tpn', 'TPN order'], ['discharge', 'Discharge summary']];
 function tabPrint(p, only) {
   const sel = only ? [only] : (settings.printSections || SECTIONS.map((s) => s[0]));
   return `<div class="card no-print"><h3>Print / save as PDF</h3>
@@ -986,6 +986,16 @@ function reportHTML(p, sel) {
     } else s += '<p class="muted">No assessment.</p>';
     s += '</section>';
   }
+  if (sel.includes('pyms')) {
+    const list = (p.pyms || []).slice().sort(byDate);
+    s += `<section><h3>PYMS screening</h3>${list.length ? `<table class="tbl compact"><thead><tr><th>Date</th><th>Wt</th><th>Ht</th><th>BMI</th><th>S1</th><th>S2</th><th>S3</th><th>S4</th><th>Total</th><th>Risk</th></tr></thead><tbody>
+      ${list.map((e) => { const t = pymsTotal(e); return `<tr><td>${fdate(e.date)}</td><td>${fmt(e.weight)}</td><td>${fmt(e.height)}</td><td>${fmt(C.bmi(e.weight, e.height))}</td><td>${e.s1 ?? 0}</td><td>${e.s2 ?? 0}</td><td>${e.s3 ?? 0}</td><td>${e.s4 ?? 0}</td><td><b>${t}</b></td><td>${C.pymsRisk(t).label}</td></tr>`; }).join('')}</tbody></table>
+      ${trendChart({ title: 'PYMS score by week', points: list.map((e) => ({ x: fdate(e.date).slice(0, 6), y: pymsTotal(e) })), yMinFixed: 0, yMaxFixed: 7 })}` : '<p class="muted">No PYMS entries.</p>'}</section>`;
+  }
+  if (sel.includes('growth')) {
+    const pts = gatherPoints(p);
+    s += `<section class="pb"><h3>Growth</h3>${growthCharts(p, pts, Math.min(999, ...pts.map((x) => x.ageM ?? 999)), Math.max(0, ...pts.map((x) => x.ageM || 0)))}</section>`;
+  }
   if (sel.includes('formula')) {
     s += '<section><h3>Formula regimen</h3>';
     const it = la?.regimen?.items || [];
@@ -995,23 +1005,6 @@ function reportHTML(p, sel) {
       <p class="small">Oral formula target: ${fmt(regimenPct(la), 0)}% of TEE</p>${regimenTotalsHTML(it, oralTarget(r, regimenPct(la)), latestLabs(p))}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
     } else s += '<p class="muted">No regimen saved.</p>';
     s += '</section>';
-  }
-  if (sel.includes('tpn')) {
-    const t = latest(p.tpn);
-    s += `<section class="pb"><h3>Parenteral nutrition order ${t ? `(${fdate(t.date)})` : ''}</h3>`;
-    if (t) { const ctx = tpnContext(p, t); s += ctx ? tpnOrderHTML(TPN.computeTPN(t, ctx), t) + (t.notes ? `<p dir="auto"><b>Notes:</b> ${nl2br(t.notes)}</p>` : '') + '<p class="sign">Prepared by: ____________ &nbsp; Checked by: ____________</p>' : ''; }
-    else s += '<p class="muted">No TPN order.</p>';
-    s += '</section>';
-  }
-  if (sel.includes('growth')) {
-    const pts = gatherPoints(p);
-    s += `<section class="pb"><h3>Growth</h3>${growthCharts(p, pts, Math.min(999, ...pts.map((x) => x.ageM ?? 999)), Math.max(0, ...pts.map((x) => x.ageM || 0)))}</section>`;
-  }
-  if (sel.includes('pyms')) {
-    const list = (p.pyms || []).slice().sort(byDate);
-    s += `<section><h3>PYMS screening</h3>${list.length ? `<table class="tbl compact"><thead><tr><th>Date</th><th>Wt</th><th>Ht</th><th>BMI</th><th>S1</th><th>S2</th><th>S3</th><th>S4</th><th>Total</th><th>Risk</th></tr></thead><tbody>
-      ${list.map((e) => { const t = pymsTotal(e); return `<tr><td>${fdate(e.date)}</td><td>${fmt(e.weight)}</td><td>${fmt(e.height)}</td><td>${fmt(C.bmi(e.weight, e.height))}</td><td>${e.s1 ?? 0}</td><td>${e.s2 ?? 0}</td><td>${e.s3 ?? 0}</td><td>${e.s4 ?? 0}</td><td><b>${t}</b></td><td>${C.pymsRisk(t).label}</td></tr>`; }).join('')}</tbody></table>
-      ${trendChart({ title: 'PYMS score by week', points: list.map((e) => ({ x: fdate(e.date).slice(0, 6), y: pymsTotal(e) })), yMinFixed: 0, yMaxFixed: 7 })}` : '<p class="muted">No PYMS entries.</p>'}</section>`;
   }
   if (sel.includes('followup')) {
     const list = (p.followUps || []).slice().sort(byDate);
@@ -1023,6 +1016,13 @@ function reportHTML(p, sel) {
       ${f.events ? `<div class="small" dir="auto">Events: ${nl2br(f.events)}</div>` : ''}${f.toFollow ? `<div class="small" dir="auto">To follow: ${nl2br(f.toFollow)}</div>` : ''}
       <div class="small">${VITALS.filter(([k]) => f.vitals?.[k]).map(([k, l]) => `${l}: ${h(f.vitals[k])}`).join(' · ')}</div></div>`; }).join('') || '<p class="muted">No follow-ups.</p>'}
       ${list.length ? '<h4>Lab trends</h4>' + labTrendTable(p) : ''}</section>`;
+  }
+  if (sel.includes('tpn')) {
+    const t = latest(p.tpn);
+    s += `<section class="pb"><h3>Parenteral nutrition order ${t ? `(${fdate(t.date)})` : ''}</h3>`;
+    if (t) { const ctx = tpnContext(p, t); s += ctx ? tpnOrderHTML(TPN.computeTPN(t, ctx), t) + (t.notes ? `<p dir="auto"><b>Notes:</b> ${nl2br(t.notes)}</p>` : '') + '<p class="sign">Prepared by: ____________ &nbsp; Checked by: ____________</p>' : ''; }
+    else s += '<p class="muted">No TPN order.</p>';
+    s += '</section>';
   }
   if (sel.includes('discharge')) {
     const d = p.discharge || {};
