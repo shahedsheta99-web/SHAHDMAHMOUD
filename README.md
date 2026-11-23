@@ -16,6 +16,7 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 | Anthropometry | BMI, %IBW, weight change, z-scores and centiles |
 | Growth charts | CDC weight/age (0–36 m and 2–20 y), height/age and BMI/age (2–20 y), with patient points plotted |
 | Formula | Oral formulas filtered by **age group**, ranked by protein range and by **abnormal lab electrolytes**; electrolyte (Na, K, Ca, P, Mg) warnings; **editable formula list inside the app** |
+| TPN | Parenteral nutrition order by ASPEN ranges (Tables 5–8): you give the **% of TEE**; protein and lipid by g/kg, dextrose fills the rest (GIR shown); electrolytes lab-aware; volumes for each additive, SWFI, rate, per-bag split, kcal, NPC:N, osmolarity and central/peripheral line; printable order |
 | PYMS | Weekly screening with automatic BMI cut-off (S1), totals, risk and a trend chart |
 | Oncology risk | The nutrition risk factor score from your sheet |
 | Follow-up | Daily sheet: prescription, feeding, **fluid balance (medication fluids, IV, formula → mL remaining)**, events, vitals and labs flagged HIGH (red) / LOW (blue), plus a lab trend table |
@@ -29,6 +30,7 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 |---|---|
 | `js/calc.js` | All equations (Schofield, ASPEN, Holliday–Segar, IBW, PYMS, …) |
 | `js/formulas.js` | The starting oral formula list (edit products inside the app on the Formulas page) |
+| `js/tpn.js` | TPN calculations and ASPEN ranges |
 | `js/labs.js` | Lab tests and reference ranges |
 | `js/growth-data.js` | CDC growth data (generated from your .xls files) |
 | `js/app.js` | Screens, forms and printed reports |

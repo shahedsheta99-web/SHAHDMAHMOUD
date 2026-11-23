@@ -6,6 +6,7 @@ import * as C from './calc.js';
 import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
 import { LABS, labFlag } from './labs.js';
 import { growthChart, trendChart } from './charts.js';
+import * as TPN from './tpn.js';
 
 // ---------------- tiny helpers ----------------
 const $ = (s, el = document) => el.querySelector(s);
@@ -202,7 +203,7 @@ function viewPatientForm(p, isNew) {
 }
 
 // ---------------- patient page with tabs ----------------
-const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['formula', 'Formula'], ['growth', 'Growth'],
+const TABS = [['overview', 'Overview'], ['assessment', 'Assessment'], ['formula', 'Formula'], ['tpn', 'TPN'], ['growth', 'Growth'],
   ['pyms', 'PYMS'], ['followup', 'Follow-up'], ['discharge', 'Discharge'], ['print', 'Print']];
 
 function viewPatient(p, tab, rest) {
@@ -215,7 +216,7 @@ function viewPatient(p, tab, rest) {
     <nav class="tabs no-print">${TABS.map(([k, l]) => `<a href="#/p/${p.id}/${k}" class="${k === tab ? 'on' : ''}">${l}</a>`).join('')}</nav>`;
   const body = {
     overview: () => tabOverview(p), edit: () => viewPatientForm(p, false), assessment: () => tabAssessment(p, rest[0]),
-    formula: () => tabFormula(p, rest[0]), growth: () => tabGrowth(p), pyms: () => tabPyms(p, rest[0]),
+    formula: () => tabFormula(p, rest[0]), tpn: () => tabTPN(p, rest[0]), growth: () => tabGrowth(p), pyms: () => tabPyms(p, rest[0]),
     followup: () => tabFollowup(p, rest[0]), discharge: () => tabDischarge(p), print: () => tabPrint(p, rest[0]),
   }[tab] || (() => tabOverview(p));
   return head + body();
@@ -522,6 +523,163 @@ function updateRegimenLive() {
 }
 
 // =====================================================================
+//  TPN (parenteral nutrition order)
+// =====================================================================
+function tpnContext(p, t) {
+  const a = latest(p.assessments); if (!a) return null;
+  const r = C.computeAssessment(p, a);
+  const w = C.pickWeight(t.weightBasis || 'actual', r.weights, t.customWeight);
+  const age = C.ageAt(p.dob, t.date || today());
+  return { w, ageY: age?.years, tee: r.energy.tee, maintenance: r.fluid.value ?? C.hollidaySegar(w), labs: latestLabs(p), labFlag, r };
+}
+function tpnLabStatus(labs) {
+  const s = {}; [['na', 'na'], ['k', 'k'], ['tca', 'ca'], ['po4', 'p'], ['mg', 'mg']].forEach(([lk, k]) => { const f = labFlag(lk, labs[lk]?.v); if (f) s[k] = f; });
+  return s;
+}
+function defaultTPN(p) {
+  const prev = latest(p.tpn);
+  if (prev) return { ...JSON.parse(JSON.stringify(prev)), id: newId(), date: today() };
+  const t = { id: newId(), date: today(), weightBasis: 'actual', stage: 'init', teePct: '', hours: 24, bags: 1, aaProduct: 'amiparen', lipidProduct: 'smof',
+    lipidInBag: 'bag', dexMode: 'auto', dexStock: 'auto', preterm: false, conc: { ...TPN.DEFAULT_CONC } };
+  const ctx = tpnContext(p, t); if (!ctx || !ctx.w) return t;
+  const g = TPN.tpnGroup(ctx.ageY, false), m = TPN.MACRO[g];
+  const pr = TPN.stageRange(m.protein, t.stage), lr = TPN.stageRange(m.lipid, t.stage);
+  const want = ctx.r.protein.gkg;
+  t.proteinGkg = want != null && want >= pr[0] && want <= pr[1] ? want : pr[0];
+  t.lipidGkg = lr[0];
+  t.volume = Math.round(ctx.maintenance || 0) || '';
+  t.lytes = TPN.suggestLytes(TPN.lyteGroup(ctx.ageY, ctx.w, false), ctx.w, tpnLabStatus(ctx.labs));
+  t.soluvit = +Math.min(10, ctx.w).toFixed(1);
+  t.vitalipid = ctx.ageY < 11 ? +Math.min(10, 4 * ctx.w).toFixed(1) : 10;
+  t.addamel = +Math.min(10, 0.1 * ctx.w).toFixed(1);
+  return t;
+}
+function tabTPN(p, oid) {
+  if (!latest(p.assessments)) return `<div class="card">Complete an <a href="#/p/${p.id}/assessment">assessment</a> first. TPN uses its weights, TEE and maintenance fluid.</div>`;
+  const list = (p.tpn || []).slice().sort(byDate);
+  let t = oid === 'new' || !list.length ? defaultTPN(p) : list.find((x) => x.id === oid) || list[list.length - 1];
+  const isNew = !list.some((x) => x.id === t.id);
+  const L = t.lytes || {}, cc = { ...TPN.DEFAULT_CONC, ...(t.conc || {}) };
+  const chips = list.map((x) => `<a class="chip ${x.id === t.id ? 'on' : ''}" href="#/p/${p.id}/tpn/${x.id}">${fdate(x.date)}</a>`).join('');
+  return `<div class="row wrap gap no-print">${chips}<a class="chip add" href="#/p/${p.id}/tpn/new">+ New TPN order</a></div>
+  <form id="tpnForm" data-pid="${p.id}" data-tid="${t.id}">
+  <div class="g2">
+   <div>
+    <div class="card"><h3>Patient & energy target</h3><div class="g3">
+      ${fld('Order date', 'date', t.date, { type: 'date', req: true })}
+      ${fld('Weight used', 'weightBasis', t.weightBasis, { type: 'select', options: wOpts })}
+      ${fld('Custom weight', 'customWeight', t.customWeight, { type: 'number', unit: 'kg', cls: 'cw' })}
+      ${fld('Stage', 'stage', t.stage, { type: 'select', options: [['init', 'Initiation'], ['adv', 'Advancing'], ['goal', 'Goal']] })}
+      ${fld('Preterm infant', 'preterm', t.preterm, { type: 'checkbox' })}
+      <span></span>
+      ${fld('% of TEE to give by TPN', 'teePct', t.teePct, { type: 'number', unit: '%', req: true, placeholder: 'e.g. 80', cls: 'span2 big' })}
+      ${fld('TEE override', 'tee', t.tee, { type: 'number', unit: 'kcal', placeholder: 'from assessment' })}
+    </div><div class="small" id="tpnCtx"></div></div>
+
+    <div class="card"><h3>Macronutrients</h3><div class="g3">
+      ${fld('Amino acid', 'aaProduct', t.aaProduct, { type: 'select', options: TPN.AA_PRODUCTS.map((x) => [x[0], x[1]]), cls: 'span2' })}
+      ${fld('AA concentration', 'aaConc', t.aaConc, { type: 'number', unit: '%', placeholder: 'product' })}
+      ${fld('Protein', 'proteinGkg', t.proteinGkg, { type: 'number', unit: 'g/kg/day' })}
+      <div class="small muted hint" data-hint="protein"></div><span></span>
+      ${fld('Lipid (SMOFlipid 20%)', 'lipidGkg', t.lipidGkg, { type: 'number', unit: 'g/kg/day' })}
+      ${fld('Lipid given', 'lipidInBag', t.lipidInBag, { type: 'select', options: [['bag', 'In the TPN bag (3-in-1)'], ['separate', 'Separately, in parallel']] })}
+      <div class="small muted hint" data-hint="lipid"></div>
+      ${fld('Dextrose', 'dexMode', t.dexMode, { type: 'select', options: [['auto', 'Auto: fill the rest of the energy target'], ['gir', 'Set by GIR']], cls: 'span2' })}
+      ${fld('GIR', 'gir', t.gir, { type: 'number', unit: 'mg/kg/min', cls: 'girf' })}
+      ${fld('Dextrose stock', 'dexStock', t.dexStock, { type: 'select', options: [['auto', 'Auto (lowest that fits)'], ...TPN.DEX_STOCKS.map((c) => [c, `Dextrose ${c}%`])] })}
+      <div class="small muted hint span2" data-hint="gir"></div>
+      ${fld('Glutamine (Dipeptiven)', 'glutamine', t.glutamine, { type: 'checkbox' })}
+      ${fld('Glutamine dose', 'glutGkg', t.glutGkg ?? 0.3, { type: 'number', unit: 'g/kg/day', cls: 'glutf' })}
+    </div></div>
+
+    <div class="card"><div class="row between"><h3>Electrolytes</h3><button type="button" class="btn sm ghost" data-action="tpnSuggestLytes">Suggest from labs</button></div>
+      <div class="g5">${TPN.LYTE_INFO.map(([k, l, u]) => `<div>${fld(l, `lytes.${k}`, L[k], { type: 'number', unit: `${u}/kg/day` })}<div class="small muted hint" data-hint="lyte-${k}"></div></div>`).join('')}</div>
+      <p class="small muted">"Suggest from labs": bottom of the ASPEN range, 0 when the lab value is high, top of the range when it is low.</p></div>
+
+    <div class="card"><h3>Vitamins & trace elements</h3><div class="g3">
+      ${fld('Soluvit N', 'soluvit', t.soluvit, { type: 'number', unit: 'mL' })}
+      ${fld('Vitalipid N', 'vitalipid', t.vitalipid, { type: 'number', unit: 'mL' })}
+      ${fld('Addamel N', 'addamel', t.addamel, { type: 'number', unit: 'mL' })}</div>
+      <div class="small muted" id="tpnMicroRef"></div></div>
+
+    <div class="card"><h3>Volume & infusion</h3><div class="g3">
+      ${fld('Total TPN volume', 'volume', t.volume, { type: 'number', unit: 'mL/day' })}
+      ${fld('Infusion time', 'hours', t.hours ?? 24, { type: 'number', unit: 'hours' })}
+      ${fld('Number of bags', 'bags', t.bags ?? 1, { type: 'number' })}</div>
+      <details><summary class="small">Product concentrations (from your order form)</summary><div class="g3">
+        ${fld('NaCl', 'conc.nacl', cc.nacl, { type: 'number', unit: 'mEq/mL' })}${fld('KCl', 'conc.kcl', cc.kcl, { type: 'number', unit: 'mEq/mL' })}
+        ${fld('Glycophos P', 'conc.glycoP', cc.glycoP, { type: 'number', unit: 'mmol/mL' })}${fld('Glycophos Na', 'conc.glycoNa', cc.glycoNa, { type: 'number', unit: 'mEq/mL' })}
+        ${fld('MgSO4', 'conc.mgso4', cc.mgso4, { type: 'number', unit: 'mEq/mL' })}${fld('Ca gluconate', 'conc.cagluc', cc.cagluc, { type: 'number', unit: 'mEq/mL' })}
+        ${fld('Dipeptiven', 'conc.dipeptiven', cc.dipeptiven, { type: 'number', unit: 'g/100 mL' })}${fld('Lipid energy', 'conc.lipidKcal', cc.lipidKcal, { type: 'number', unit: 'kcal/g' })}
+      </div></details>
+      ${fld('Notes / indication', 'notes', t.notes, { type: 'textarea', rows: 2 })}</div>
+   </div>
+   <div><div class="card sticky" id="tpnResults"></div></div>
+  </div>
+  <div class="savebar no-print"><button class="btn">${isNew ? 'Save TPN order' : 'Save changes'}</button><a class="btn ghost" href="#/p/${p.id}/print/tpn">Print</a>
+  ${isNew ? '' : `<button type="button" class="btn danger ghost right" data-action="deleteItem" data-kind="tpn" data-pid="${p.id}" data-iid="${t.id}">Delete</button>`}</div>
+  </form>`;
+}
+
+function tpnOrderHTML(res, t) {
+  if (res.errors.length && !res.w) return `<div class="alert warn">${h(res.errors[0])}</div>`;
+  const per = (ml) => (res.bags > 1 ? `<td>${fmt(ml / res.bags, 1)}</td>` : '');
+  const bh = res.bags > 1 ? `<th>Per bag (${res.bags})</th>` : '';
+  const row = (name, dose, day, ml, conc) => `<tr><td>${name}</td><td>${dose}</td><td>${day}</td><td><b>${fmt(ml, 1)}</b></td>${per(ml)}<td class="small muted">${conc || ''}</td></tr>`;
+  const W = res.warnings.filter((x) => x[0] === 'bad').concat(res.warnings.filter((x) => x[0] !== 'bad'));
+  return `
+    ${res.errors.map((e) => `<div class="alert bad">${h(e)}</div>`).join('')}
+    ${res.pct == null ? '<div class="alert warn"><b>Enter the % of TEE</b> you want to give by TPN.</div>' : ''}
+    <div class="needs">
+      <div class="need"><span>Energy</span><b>${fmt(res.totalKcal, 0)}</b><em>kcal/day</em><small>${fmt(res.pctTEE, 0)}% of TEE ${fmt(res.tee, 0)} · ${fmt(res.kcalPerKg, 0)} kcal/kg</small></div>
+      <div class="need"><span>GIR</span><b>${fmt(res.dex.gir, 1)}</b><em>mg/kg/min</em><small>ASPEN ${res.ranges.gir?.join('–')}</small></div>
+      <div class="need"><span>Rate</span><b>${fmt(res.rate, 0)}</b><em>mL/h</em><small>${fmt(res.finalVol, 0)} mL over ${res.hours} h</small></div>
+    </div>
+    <div class="tablewrap"><table class="tbl compact"><thead><tr><th>Component</th><th>Dose</th><th>Per day</th><th>Volume mL</th>${bh}<th>Product</th></tr></thead><tbody>
+      ${row(h(res.aa.name), `${fmt(res.aa.gkg, 2)} g/kg`, `${fmt(res.aa.g, 1)} g`, res.aa.ml, `${res.aa.conc} g/100 mL`)}
+      ${res.glut ? row('Dipeptiven (glutamine)', `${fmt(res.glut.gkg, 2)} g/kg`, `${fmt(res.glut.g, 1)} g`, res.glut.ml, '20 g/100 mL') : ''}
+      ${row(`Dextrose ${res.dex.stock}%`, `GIR ${fmt(res.dex.gir, 1)}`, `${fmt(res.dex.g, 1)} g`, res.dex.ml, `${res.dex.stock} g/100 mL`)}
+      ${res.add.filter((a) => a.amount > 0).map((a) => row(a.name, a.key === 'nacl' ? '' : `${fmt(res.lytes[{ kcl: 'k', glyco: 'p', mgso4: 'mg', cagluc: 'ca' }[a.key]]?.perKg, 2)} /kg`, `${fmt(a.amount, 1)} ${a.unit}`, a.ml, a.conc)).join('')}
+      ${res.vit.filter((v) => v.ml > 0).map((v) => row(v.name, '', '', v.ml, '')).join('')}
+      ${row('Sterile water (SWFI)', '', '', res.swfi, '')}
+      ${res.lipid.inBag ? row(h(res.lipid.name), `${fmt(res.lipid.gkg, 2)} g/kg`, `${fmt(res.lipid.g, 1)} g`, res.lipid.ml, '20 g/100 mL, in bag') : ''}
+      <tr><td><b>Final volume</b></td><td></td><td></td><td><b>${fmt(res.bagVol, 0)}</b></td>${per(res.bagVol)}<td><b>${fmt(res.rate, 1)} mL/h</b></td></tr>
+      ${!res.lipid.inBag ? `<tr><td>${h(res.lipid.name)} (separate)</td><td>${fmt(res.lipid.gkg, 2)} g/kg</td><td>${fmt(res.lipid.g, 1)} g</td><td><b>${fmt(res.lipid.ml, 0)}</b></td>${per(res.lipid.ml)}<td><b>${fmt(res.lipidRate, 1)} mL/h</b></td></tr>` : ''}
+    </tbody></table></div>
+    <table class="kv">
+      <tr><th>Energy</th><td>Protein ${fmt(res.proteinKcal, 0)} + dextrose ${fmt(res.dex.kcal, 0)} + lipid ${fmt(res.lipid.kcal, 0)} = <b>${fmt(res.totalKcal, 0)} kcal</b> (target ${fmt(res.target, 0)} = ${fmt(res.pct, 0)}% of TEE)</td></tr>
+      <tr><th>NPC : N</th><td>1 : ${fmt(res.npcN, 0)} (dextrose kcal only 1 : ${fmt(res.dexN, 0)})</td></tr>
+      <tr><th>Osmolarity</th><td>${fmt(res.osmolarity, 0)} mOsm/L · final dextrose ${fmt(res.dexConcFinal, 1)}%</td></tr>
+      <tr><th>Line</th><td><span class="pill ${res.line === 'central' ? 'bad' : 'good'}">${res.line === 'central' ? 'CENTRAL line' : 'Peripheral possible'}</span> <small class="muted">(peripheral only if ≤ 900 mOsm/L and dextrose ≤ 12.5%)</small></td></tr>
+      <tr><th>Volume</th><td>${fmt(res.finalVol, 0)} mL = ${fmt(res.volPct, 0)}% of maintenance</td></tr>
+      <tr><th>Ca / P in bag</th><td>${fmt(res.caConc, 1)} mEq/L Ca · ${fmt(res.pConc, 1)} mmol/L P</td></tr>
+    </table>
+    ${W.map(([c, m]) => `<div class="alert ${c}">${h(m)}</div>`).join('')}`;
+}
+function updateTPNLive() {
+  const form = $('#tpnForm'); if (!form) return;
+  const p = getP(form.dataset.pid); const t = readForm(form);
+  const ctx = tpnContext(p, t); if (!ctx) return;
+  const res = TPN.computeTPN(t, ctx);
+  $('#tpnResults').innerHTML = `<h3>TPN order</h3>${tpnOrderHTML(res, t)}`;
+  form.querySelector('.cw').style.display = t.weightBasis === 'custom' ? '' : 'none';
+  form.querySelector('.girf').style.display = t.dexMode === 'gir' ? '' : 'none';
+  form.querySelector('.glutf').style.display = t.glutamine ? '' : 'none';
+  const m = res.macro;
+  $('#tpnCtx').innerHTML = res.w ? `<p class="muted">${h(m?.label || '')} · weight ${fmt(res.w)} kg · TEE ${fmt(res.tee, 0)} kcal · maintenance fluid ${fmt(ctx.maintenance, 0)} mL${Object.keys(ctx.labs).length ? ' · using latest follow-up labs' : ' · no labs entered yet'}</p>` : '';
+  const hint = (k, txt) => { const el = form.querySelector(`[data-hint="${k}"]`); if (el) el.textContent = txt; };
+  if (m) {
+    const st = { init: 'initiation', adv: 'advancing', goal: 'goal' }[res.stage];
+    hint('protein', `ASPEN ${st}: ${res.ranges.protein.join('–')} g/kg/day${m.protein.max ? ` (max ${m.protein.max})` : ''}`);
+    hint('lipid', `ASPEN ${st}: ${res.ranges.lipid.join('–')} g/kg/day; advance by ${m.lipid.adv.join('–')} g/kg/day`);
+    hint('gir', `ASPEN ${st}: GIR ${res.ranges.gir.join('–')} mg/kg/min; advance by ${m.gir.adv.join('–')}/day${m.gir.max ? `; max ${m.gir.max}` : ''}`);
+    TPN.LYTE_INFO.forEach(([k, , u]) => hint('lyte-' + k, `ASPEN ${res.lytes[k].range.text} (${u})${ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k] ? ` · lab ${ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k].v} ${flagText(labFlag({ ca: 'tca', p: 'po4' }[k] || k, ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k].v))}` : ''}`));
+    const tr = TPN.traceRef(res.w, t.preterm);
+    $('#tpnMicroRef').innerHTML = `ASPEN multivitamin (MVI pediatric): ${TPN.mviRef(res.w)} mL/day. ASPEN trace elements, ${tr.label}: Zn ${tr.zn}, Cu ${tr.cu}, Mn ${tr.mn}, Cr ${tr.cr}, Se ${tr.se}${tr.calc ? ` = Zn ${fmt(tr.calc.zn, 0)}, Cu ${fmt(tr.calc.cu, 0)}, Mn ${fmt(tr.calc.mn, 0)}, Se ${fmt(tr.calc.se, 0)} mcg/day` : ''}. Defaults: Soluvit 1 mL/kg (max 10), Vitalipid infant 4 mL/kg (max 10) or adult 10 mL from 11 y, Addamel 0.1 mL/kg. Check against your product leaflets.`;
+  }
+}
+
+// =====================================================================
 //  GROWTH
 // =====================================================================
 function gatherPoints(p) {
@@ -775,7 +933,7 @@ function tabDischarge(p) {
 // =====================================================================
 //  PRINT / REPORTS
 // =====================================================================
-const SECTIONS = [['assessment', 'Assessment & requirements'], ['formula', 'Formula regimen'], ['growth', 'Growth charts'], ['pyms', 'PYMS'], ['followup', 'Follow-ups & labs'], ['discharge', 'Discharge summary']];
+const SECTIONS = [['assessment', 'Assessment & requirements'], ['formula', 'Formula regimen'], ['tpn', 'TPN order'], ['growth', 'Growth charts'], ['pyms', 'PYMS'], ['followup', 'Follow-ups & labs'], ['discharge', 'Discharge summary']];
 function tabPrint(p, only) {
   const sel = only ? [only] : (settings.printSections || SECTIONS.map((s) => s[0]));
   return `<div class="card no-print"><h3>Print / save as PDF</h3>
@@ -819,6 +977,13 @@ function reportHTML(p, sel) {
       ${it.map((i) => { const f = formulaById(i.id); if (!f) return ''; const n = +i.servings || 0; return `<tr><td>${h(f.name)}</td><td>${fmt(n)}</td><td>${f.scoops ? fmt(f.scoops * n, 0) : '—'}</td><td>${f.volume ? fmt(f.volume * n, 0) + ' mL' : '—'}</td><td>${fmt(f.kcal * n, 0)}</td><td>${fmt(f.protein * n)} g</td></tr>`; }).join('')}</tbody></table>
       ${regimenTotalsHTML(it, r, latestLabs(p))}<p class="small">Route: ${h(la.regimen.route || '—')} · ${h(la.regimen.schedule || '')} ${la.regimen.notes ? '· ' + h(la.regimen.notes) : ''}</p>`;
     } else s += '<p class="muted">No regimen saved.</p>';
+    s += '</section>';
+  }
+  if (sel.includes('tpn')) {
+    const t = latest(p.tpn);
+    s += `<section class="pb"><h3>Parenteral nutrition order ${t ? `(${fdate(t.date)})` : ''}</h3>`;
+    if (t) { const ctx = tpnContext(p, t); s += ctx ? tpnOrderHTML(TPN.computeTPN(t, ctx), t) + (t.notes ? `<p dir="auto"><b>Notes:</b> ${nl2br(t.notes)}</p>` : '') + '<p class="sign">Prepared by: ____________ &nbsp; Checked by: ____________</p>' : ''; }
+    else s += '<p class="muted">No TPN order.</p>';
     s += '</section>';
   }
   if (sel.includes('growth')) {
@@ -907,7 +1072,7 @@ function viewSettings() {
 //  EVENTS
 // =====================================================================
 function afterRender() {
-  updateAssessLive(); updatePymsLive(false); updateRegimenLive();
+  updateAssessLive(); updatePymsLive(false); updateRegimenLive(); updateTPNLive();
 }
 
 document.addEventListener('input', (ev) => {
@@ -916,6 +1081,7 @@ document.addEventListener('input', (ev) => {
   if (t.closest('form')) state.dirty = true;
   if (t.closest('#assessForm')) updateAssessLive();
   if (t.closest('#pymsForm')) updatePymsLive(['weight', 'height', 'date'].includes(t.name));
+  if (t.closest('#tpnForm')) updateTPNLive();
   if (t.closest('#regimenForm') || t.closest('#fuForm')) updateRegimenLive();
   if (t.closest('#fuForm') && t.name?.startsWith('labs.')) {
     const fl = labFlag(t.name.slice(5), t.value); t.className = fl;
@@ -937,6 +1103,7 @@ document.addEventListener('change', (ev) => {
   }
   if (t.closest('#assessForm')) updateAssessLive();
   if (t.closest('#pymsForm')) updatePymsLive(false);
+  if (t.closest('#tpnForm')) updateTPNLive();
   if (t.closest('#regimenForm') || t.closest('#fuForm')) updateRegimenLive();
 });
 
@@ -977,6 +1144,10 @@ document.addEventListener('submit', async (ev) => {
     const a = p.assessments.find((x) => x.id === form.dataset.aid);
     a.regimen = { ...d.regimen, items: normItems(d.regimen?.items) };
     savePatient(p, 'Regimen saved'); render();
+  } else if (form.id === 'tpnForm') {
+    d.id = form.dataset.tid;
+    if (d.teePct === '') { alert('Enter the % of TEE you want to give by TPN.'); return; }
+    upsert('tpn', d); savePatient(p, 'TPN order saved'); go(`#/p/${pid}/tpn/${d.id}`);
   } else if (form.id === 'measForm') {
     d.id = newId(); upsert('measurements', d); savePatient(p, 'Measurement added'); render();
   } else if (form.id === 'pymsForm') {
@@ -1007,7 +1178,14 @@ const actions = {
     const p = JSON.parse(JSON.stringify(getP(el.dataset.pid)));
     p[el.dataset.kind] = (p[el.dataset.kind] || []).filter((x) => x.id !== el.dataset.iid);
     savePatient(p, 'Deleted');
-    go(`#/p/${p.id}/${{ assessments: 'assessment', pyms: 'pyms', followUps: 'followup' }[el.dataset.kind]}`);
+    go(`#/p/${p.id}/${{ assessments: 'assessment', pyms: 'pyms', followUps: 'followup', tpn: 'tpn' }[el.dataset.kind]}`);
+  },
+  tpnSuggestLytes: () => {
+    const form = $('#tpnForm'); const p = getP(form.dataset.pid); const t = readForm(form); const ctx = tpnContext(p, t);
+    if (!ctx?.w) return;
+    const sug = TPN.suggestLytes(TPN.lyteGroup(ctx.ageY, ctx.w, t.preterm), ctx.w, tpnLabStatus(ctx.labs));
+    Object.entries(sug).forEach(([k, v]) => { form.querySelector(`[name="lytes.${k}"]`).value = v; });
+    updateTPNLive(); toast('Electrolytes suggested from labs');
   },
   addRegRow: () => { $('#regRows').insertAdjacentHTML('beforeend', regimenRow()); },
   addMedRow: () => { $('#medRows').insertAdjacentHTML('beforeend', medRow()); },
