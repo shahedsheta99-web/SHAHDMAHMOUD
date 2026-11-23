@@ -619,8 +619,12 @@ function tabTPN(p, oid) {
       ${fld('Addamel N', 'addamel', t.addamel, { type: 'number', unit: 'mL' })}</div>
       <div class="small muted" id="tpnMicroRef"></div></div>
 
-    <div class="card"><h3>Volume & infusion</h3><div class="g3">
-      ${fld('Total TPN volume', 'volume', t.volume, { type: 'number', unit: 'mL/day' })}
+    <div class="card"><h3>Line, volume & infusion</h3><div class="g3">
+      ${fld('Line', 'line', t.line || 'peripheral', { type: 'select', options: [['peripheral', 'Peripheral line'], ['central', 'Central line']], cls: 'span2 big' })}
+      <span></span>
+      ${fld('Fluid allowance (max TPN volume)', 'volume', t.volume, { type: 'number', unit: 'mL/day' })}
+      ${fld('Extra sterile water (optional)', 'extraWater', t.extraWater, { type: 'number', unit: 'mL', placeholder: '0' })}
+      <span></span>
       ${fld('Infusion time', 'hours', t.hours ?? 24, { type: 'number', unit: 'hours' })}
       ${fld('Number of bags', 'bags', t.bags ?? 1, { type: 'number' })}</div>
       <details><summary class="small">Product concentrations (from your order form)</summary><div class="g3">
@@ -658,7 +662,7 @@ function tpnOrderHTML(res, t) {
       ${row(`Dextrose ${res.dex.stock}%`, `GIR ${fmt(res.dex.gir, 1)}`, `${fmt(res.dex.g, 1)} g`, res.dex.ml, `${res.dex.stock} g/100 mL`)}
       ${res.add.filter((a) => a.amount > 0).map((a) => row(a.name, a.key === 'nacl' ? '' : `${fmt(res.lytes[{ kcl: 'k', glyco: 'p', mgso4: 'mg', cagluc: 'ca' }[a.key]]?.perKg, 2)} /kg`, `${fmt(a.amount, 1)} ${a.unit}`, a.ml, a.conc)).join('')}
       ${res.vit.filter((v) => v.ml > 0).map((v) => row(v.name, '', '', v.ml, '')).join('')}
-      ${row('Sterile water (SWFI)', '', '', res.swfi, '')}
+      ${res.swfi > 0 ? row('Sterile water (SWFI)', '', '', res.swfi, [res.swfiAuto > 0 ? `${fmt(res.swfiAuto, 0)} mL ${res.swfiReason}` : '', res.swfiExtra > 0 ? `${fmt(res.swfiExtra, 0)} mL extra (your choice)` : ''].filter(Boolean).join('; ')) : ''}
       ${res.lipid.inBag ? row(h(res.lipid.name), `${fmt(res.lipid.gkg, 2)} g/kg`, `${fmt(res.lipid.g, 1)} g`, res.lipid.ml, '20 g/100 mL, in bag') : ''}
       <tr><td><b>Final volume</b></td><td></td><td></td><td><b>${fmt(res.bagVol, 0)}</b></td>${per(res.bagVol)}<td><b>${fmt(res.rate, 1)} mL/h</b></td></tr>
       ${!res.lipid.inBag ? `<tr><td>${h(res.lipid.name)} (separate)</td><td>${fmt(res.lipid.gkg, 2)} g/kg</td><td>${fmt(res.lipid.g, 1)} g</td><td><b>${fmt(res.lipid.ml, 0)}</b></td>${per(res.lipid.ml)}<td><b>${fmt(res.lipidRate, 1)} mL/h</b></td></tr>` : ''}
@@ -667,8 +671,8 @@ function tpnOrderHTML(res, t) {
       <tr><th>Energy</th><td>Protein ${fmt(res.proteinKcal, 0)} + dextrose ${fmt(res.dex.kcal, 0)} + lipid ${fmt(res.lipid.kcal, 0)} = <b>${fmt(res.totalKcal, 0)} kcal</b> (target ${fmt(res.target, 0)} = ${fmt(res.pct, 0)}% of TEE)</td></tr>
       <tr><th>NPC : N</th><td>1 : ${fmt(res.npcN, 0)} (dextrose kcal only 1 : ${fmt(res.dexN, 0)})</td></tr>
       <tr><th>Osmolarity</th><td>${fmt(res.osmolarity, 0)} mOsm/L · final dextrose ${fmt(res.dexConcFinal, 1)}%</td></tr>
-      <tr><th>Line</th><td><span class="pill ${res.line === 'central' ? 'bad' : 'good'}">${res.line === 'central' ? 'CENTRAL line' : 'Peripheral possible'}</span> <small class="muted">(peripheral only if ≤ 900 mOsm/L and dextrose ≤ 12.5%)</small></td></tr>
-      <tr><th>Volume</th><td>${fmt(res.finalVol, 0)} mL = ${fmt(res.volPct, 0)}% of maintenance</td></tr>
+      <tr><th>Line</th><td><span class="pill ${res.line === 'central' ? 'warn' : 'good'}">${res.line === 'central' ? 'CENTRAL line' : 'PERIPHERAL line'}</span> <small class="muted">${res.line === 'peripheral' ? 'limits ≤ 900 mOsm/L and dextrose ≤ 12.5% (ASPEN); sterile water added only if needed' : 'no sterile water added for osmolarity'}</small></td></tr>
+      <tr><th>Volume</th><td>${fmt(res.finalVol, 0)} mL${res.volTarget ? ` of ${fmt(res.volTarget, 0)} mL allowance` : ''} · ${fmt(res.volPct, 0)}% of maintenance</td></tr>
       <tr><th>Ca / P in bag</th><td>${fmt(res.caConc, 1)} mEq/L Ca · ${fmt(res.pConc, 1)} mmol/L P</td></tr>
     </table>
     ${W.map(([c, m]) => `<div class="alert ${c}">${h(m)}</div>`).join('')}`;

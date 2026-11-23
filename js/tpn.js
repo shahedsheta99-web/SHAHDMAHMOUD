@@ -169,23 +169,41 @@ export function computeTPN(t, ctx) {
     { key: 'addamel', name: 'Addamel N', ml: n(t.addamel) ?? 0 },
   ];
 
-  // Volume
-  const volTarget = n(t.volume) ?? ctx.maintenance;
-  res.volTarget = volTarget;
+  // Volume — no sterile water by default. Water is added ONLY when a peripheral
+  // line needs it (ASPEN peripheral limits: osmolarity ≤ 900 mOsm/L, dextrose ≤ 12.5%),
+  // plus any extra water you choose to add.
+  const line = t.line === 'central' ? 'central' : 'peripheral';
+  res.lineChosen = line;
+  const allowance = n(t.volume) ?? ctx.maintenance;  // fluid allowance (maximum TPN volume)
+  res.volTarget = allowance;
   const fixed = res.aa.ml + (res.glut?.ml || 0) + res.add.reduce((s, a) => s + a.ml, 0) + res.vit.reduce((s, v) => s + v.ml, 0) + (res.lipid.inBag ? res.lipid.ml : 0);
-  const avail = (volTarget || 0) - fixed;
   let stock = t.dexStock && t.dexStock !== 'auto' ? +t.dexStock : null;
-  if (!stock) stock = DEX_STOCKS.find((c) => dexG / (c / 100) <= avail + 1e-9) || 50;
+  // auto: the lowest dextrose concentration that still fits inside the fluid allowance
+  if (!stock) stock = DEX_STOCKS.find((c) => !allowance || fixed + dexG / (c / 100) <= allowance + 1e-9) || 50;
   res.dex.stock = stock; res.dex.ml = dexG / (stock / 100);
-  res.swfi = avail - res.dex.ml;
-  if (res.swfi < -0.5) res.errors.push(`The volume is ${Math.ceil(-res.swfi)} mL too small for this order. Increase the volume, choose a stronger dextrose stock, or lower the doses.`);
-  res.swfi = Math.max(0, res.swfi);
-  res.bagVol = fixed - (res.lipid.inBag ? 0 : 0) + res.dex.ml + res.swfi; // main bag (includes lipid when in bag)
+  const extra = Math.max(0, n(t.extraWater) || 0);
+  const base = fixed + res.dex.ml + extra;
+  // Osmolarity numerator (your sheet's method): AA g×10 + dextrose g×5 + lipid g×1.3 (if in bag) + (Na+K+Ca+Mg mEq + P mmol)×2
+  const lyteSum = res.lytes.na.day + res.lytes.k.day + res.lytes.ca.day + res.lytes.mg.day + res.lytes.p.day;
+  const osm = proteinG * 10 + dexG * 5 + (res.lipid.inBag ? res.lipid.g * 1.3 : 0) + lyteSum * 2;
+  res.osmTotal = osm;
+  const lipidBagMl = res.lipid.inBag ? res.lipid.ml : 0;
+  const needOsm = line === 'peripheral' ? osm / 900 * 1000 : 0;          // mL needed for ≤ 900 mOsm/L
+  const needDex = line === 'peripheral' ? dexG / 0.125 + lipidBagMl : 0;  // mL needed for dextrose ≤ 12.5%
+  const required = Math.max(base, needOsm, needDex);
+  res.swfiAuto = Math.max(0, required - base);
+  res.swfiExtra = extra;
+  res.swfi = extra + res.swfiAuto;
+  res.swfiReason = res.swfiAuto > 0 ? (needOsm >= needDex ? 'to keep osmolarity ≤ 900 mOsm/L (peripheral)' : 'to keep dextrose ≤ 12.5% (peripheral)') : '';
+  res.bagVol = base + res.swfiAuto; // main bag (includes lipid when in bag)
   res.finalVol = res.bagVol + (res.lipid.inBag ? 0 : res.lipid.ml);
   res.rate = res.bagVol / hours;
   res.lipidRate = res.lipid.inBag ? null : res.lipid.ml / hours;
-  const bags = Math.max(1, Math.round(n(t.bags) || 1));
-  res.bags = bags;
+  res.bags = Math.max(1, Math.round(n(t.bags) || 1));
+  if (allowance && res.finalVol > allowance + 0.5) {
+    if (res.swfiAuto > 0) res.errors.push(`For a PERIPHERAL line this order needs ${Math.round(res.finalVol)} mL (sterile water ${Math.round(res.swfiAuto)} mL added), which is more than the fluid allowance of ${Math.round(allowance)} mL. Use a central line, or lower the dextrose / electrolytes.`);
+    else res.warnings.push(['bad', `The order needs ${Math.round(res.finalVol)} mL, more than the fluid allowance of ${Math.round(allowance)} mL. Choose a stronger dextrose stock or lower the doses.`]);
+  }
 
   // Energy summary
   res.totalKcal = res.proteinKcal + res.dex.kcal + res.lipid.kcal;
@@ -195,15 +213,12 @@ export function computeTPN(t, ctx) {
   res.dexN = N ? res.dex.kcal / N : null;
   res.kcalPerKg = res.totalKcal / w;
 
-  // Osmolarity (your sheet's method): AA g×10 + dextrose g×5 + lipid g×1.3 (if in bag) + (Na+K+Ca+Mg mEq + P mmol)×2
-  const lyteSum = res.lytes.na.day + res.lytes.k.day + res.lytes.ca.day + res.lytes.mg.day + res.lytes.p.day;
-  const osm = proteinG * 10 + dexG * 5 + (res.lipid.inBag ? res.lipid.g * 1.3 : 0) + lyteSum * 2;
-  res.osmolarity = res.bagVol ? osm / (res.bagVol / 1000) : null;
+  res.osmolarity = res.bagVol ? res.osmTotal / (res.bagVol / 1000) : null;
   const aqVol = res.bagVol - (res.lipid.inBag ? res.lipid.ml : 0);
   res.dexConcFinal = aqVol ? dexG / aqVol * 100 : null;
   res.caConc = aqVol ? res.lytes.ca.day / (aqVol / 1000) : null; // mEq/L
   res.pConc = aqVol ? res.lytes.p.day / (aqVol / 1000) : null;   // mmol/L
-  res.line = res.osmolarity > 900 || res.dexConcFinal > 12.5 ? 'central' : 'peripheral';
+  res.line = line;
 
   // ---- Range checks (ASPEN) ----
   const chk = (val, r, label, unit) => {
@@ -221,10 +236,10 @@ export function computeTPN(t, ctx) {
     const r = res.lytes[k].range.perKg; const info = LYTE_INFO.find((x) => x[0] === k);
     if (r && res.lytes[k].perKg > r[1] + 1e-9) res.warnings.push(['warn', `${info[1]} ${res.lytes[k].perKg} ${info[2]}/kg is above the ASPEN range (${res.lytes[k].range.text}).`]);
   });
-  if (volTarget && ctx.maintenance) res.volPct = volTarget / ctx.maintenance * 100;
+  if (ctx.maintenance) res.volPct = res.finalVol / ctx.maintenance * 100;
   if (res.volPct > 120) res.warnings.push(['warn', `TPN volume is ${res.volPct.toFixed(0)}% of maintenance fluid (${Math.round(ctx.maintenance)} mL).`]);
-  if (res.osmolarity > 900) res.warnings.push(['bad', `Osmolarity ${res.osmolarity.toFixed(0)} mOsm/L is above 900: give through a CENTRAL line.`]);
-  if (res.dexConcFinal > 12.5) res.warnings.push(['bad', `Final dextrose ${res.dexConcFinal.toFixed(1)}% is above 12.5%: give through a CENTRAL line.`]);
+  if (line === 'peripheral' && res.swfiAuto > 0) res.warnings.push(['warn', `Sterile water ${Math.round(res.swfiAuto)} mL added ${res.swfiReason}.`]);
+  if (line === 'central' && (res.osmolarity > 900 || res.dexConcFinal > 12.5)) res.warnings.push(['warn', `Osmolarity ${res.osmolarity.toFixed(0)} mOsm/L, dextrose ${res.dexConcFinal.toFixed(1)}%: central line only. Do not give peripherally.`]);
   res.warnings.push(['warn', 'Use caution with calcium and phosphate together (compatibility): check with pharmacy.']);
 
   // ---- Lab-based warnings ----
