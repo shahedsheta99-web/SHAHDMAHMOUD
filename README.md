@@ -37,6 +37,24 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 | `css/style.css` | Colours and layout |
 | `js/firebase-config.js` | Paste your Firebase settings here to turn on accounts and sync |
 
+## My Nutrition (personal calorie tracker) — `tracker/`
+
+A second app in the same site, at `…/SHAHDMAHMOUD/tracker/` (also linked as **My Nutrition** in the top menu).
+Install it on your phone the same way (Add to Home Screen).
+
+| Feature | Details |
+|---|---|
+| Nutrition plans | Calorie target from Mifflin-St Jeor × activity, goal (lose / maintain / gain, kg per week), diet style (balanced, high protein, low carb, keto, Mediterranean, endurance, custom %), 3–5 meals, Egyptian / international / mixed food. **Save as many plans as you like**, choose the active one, duplicate, edit, delete |
+| Daily menu | Each plan generates a sample day of meals that fits its calories and macros; regenerate, remove or add items; "Log my plan's menu" copies it into today |
+| Daily tracker | Breakfast, lunch, dinner, snacks; calorie ring and protein/carb/fat bars; water glasses; weight and notes; change portions with − / +; copy yesterday; any past day |
+| Meal scanners | **AI photo scan** (photo and/or description → each food with grams, kcal and macros, editable before adding; needs your own Anthropic API key in Settings) and **barcode scan** (packaged products from Open Food Facts, free) |
+| Food database | 320+ Egyptian and international foods with Arabic names (search in English or Arabic), plus your own foods and favorites |
+| Recommendations | Ideas for the next meal from what is left today: full meal combos, Egyptian and international picks, high-protein choices, light snacks, favorites that fit, and personal tips |
+| History | 7/14/30-day calorie chart vs target, averages, days on target, logging streak, weight trend |
+| Backup | Data stays in the browser on your device; download / restore a backup file to move it |
+
+Files: `tracker/foods.js` (food list), `tracker/tracker.js` (screens and logic), `tracker/scanner.js` (scanners), `tracker/tracker.css`.
+
 ---
 
 ## Step 1: Put the app online (free, with GitHub Pages)
