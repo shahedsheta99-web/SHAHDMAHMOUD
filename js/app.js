@@ -1035,6 +1035,7 @@ function reportHTML(p, sel) {
         .filter(([, v]) => v).map(([l, v]) => `<p><b>${l}:</b><br><span dir="auto">${nl2br(v)}</span></p>`).join('')}
       <p class="sign">Clinical dietitian: ${h(d.dietitian || settings.dietitian || '')} &nbsp;&nbsp; Signature: ____________________</p></section>`;
   }
+  s += '<p class="rep-credit">Created by Shahed Mahmoud</p>';
   return s;
 }
 
