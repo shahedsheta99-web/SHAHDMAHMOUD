@@ -140,7 +140,7 @@ export function imageToBase64(file, max = 1280) {
 }
 
 // Returns { items: [...], note }.
-export async function analyzeMeal({ apiKey, imageB64, text }) {
+export async function analyzeMeal({ apiKey, imageB64, text, lang = 'en' }) {
   if (!apiKey) throw new Error('Add your Anthropic API key in Settings to use the AI meal scanner.');
   const anthropic = await client(apiKey);
   const content = [];
@@ -153,7 +153,7 @@ export async function analyzeMeal({ apiKey, imageB64, text }) {
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
     output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
-    system: SYSTEM,
+    system: SYSTEM + (lang === 'ar' ? '\nThe user reads Arabic: write the note in Egyptian Arabic.' : ''),
     messages: [{ role: 'user', content }],
   });
 

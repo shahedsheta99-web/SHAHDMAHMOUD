@@ -1,6 +1,6 @@
 // Service worker for My Nutrition (separate from the pediatric app).
 // Network first, always revalidated; the last saved copy is used offline.
-const CACHE = 'mynutrition-v1';
+const CACHE = 'mynutrition-v2';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) if (k.startsWith('mynutrition-') && k !== CACHE) await caches.delete(k);

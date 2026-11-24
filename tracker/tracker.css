@@ -120,3 +120,22 @@ button.chip { font: inherit; font-size: .85rem; cursor: pointer; }
 .h-target { stroke: var(--cc); stroke-width: 2; stroke-dasharray: 6 4; }
 .h-lab { font-size: 11px; fill: var(--muted); }
 .w-line { fill: none; stroke: var(--cf); stroke-width: 2.5; } .w-pt { fill: var(--cf); }
+
+/* language button + right-to-left (Arabic) */
+.langbtn { margin-inline-start: auto; font-family: inherit; }
+[dir="rtl"] body { font-family: "Noto Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif; }
+[dir="rtl"] .flip { transform: scaleX(-1); }
+[dir="rtl"] .sheet-x { right: auto; left: 10px; }
+[dir="rtl"] .sheet h3 { padding-right: 0; padding-left: 30px; }
+[dir="rtl"] .tips { padding-left: 0; padding-right: 1.2rem; }
+[dir="rtl"] .f-kcal { text-align: left; }
+[dir="rtl"] .gram input { text-align: left; }
+[dir="rtl"] .tbl th, [dir="rtl"] .kv th { text-align: right; }
+[dir="rtl"] .right { margin-left: 0; margin-right: auto; }
+[dir="rtl"] details > summary::before { content: '◂ '; }
+[dir="rtl"] details[open] > summary::before { content: '▾ '; }
+[dir="rtl"] .need span { letter-spacing: 0; text-transform: none; }
+.ring, .hchart { direction: ltr; }
+.num { unicode-bidi: plaintext; }
+input[type="number"], input[type="date"] { direction: ltr; }
+[dir="rtl"] input[type="number"] { text-align: right; }

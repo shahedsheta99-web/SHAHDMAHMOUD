@@ -53,9 +53,10 @@ Install it on your phone on its own (open the link → Add to Home Screen).
 | Food database | 320+ Egyptian and international foods with Arabic names (search in English or Arabic), plus your own foods and favorites |
 | Recommendations | Ideas for the next meal from what is left today: full meal combos, Egyptian and international picks, high-protein choices, light snacks, favorites that fit, and personal tips |
 | History | 7/14/30-day calorie chart vs target, averages, days on target, logging streak, weight trend |
+| Arabic | Full Arabic version with right-to-left layout: tap **عربي** at the top (or Settings → Language). Food names, serving sizes, plans, tips and the AI scanner's notes switch to Arabic; Arabic search ignores أ/إ/ا and ة/ه differences |
 | Backup | Data stays in the browser on your device; download / restore a backup file to move it |
 
-Files: `tracker/foods.js` (food list), `tracker/tracker.js` (screens and logic), `tracker/scanner.js` (scanners), `tracker/base.css` + `tracker/tracker.css` (styles), `tracker/icons/`, `tracker/sw.js`.
+Files: `tracker/foods.js` (food list), `tracker/tracker.js` (screens and logic), `tracker/scanner.js` (scanners), `tracker/i18n.js` (Arabic translations), `tracker/base.css` + `tracker/tracker.css` (styles), `tracker/icons/`, `tracker/sw.js`.
 
 ---
 

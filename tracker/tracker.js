@@ -1,10 +1,12 @@
 // =====================================================================
 //  tracker.js — My Nutrition: plans, daily tracker, scanners,
-//  recommendations and history. Everything is saved on this device
-//  (browser storage) — use Settings → Backup to move it to another device.
+//  recommendations and history, in English and Arabic.
+//  Everything is saved on this device (browser storage) — use
+//  Settings → Backup to move it to another device.
 // =====================================================================
-import { FOODS, REGION_LABEL } from './foods.js';
+import { FOODS } from './foods.js';
 import { scanBarcode, lookupBarcode, imageToBase64, analyzeMeal, aiErrorMessage } from './scanner.js';
+import { t, setLang, getLang, locale, cat, serving as srv } from './i18n.js';
 
 // ---------------- helpers ----------------
 const $ = (s, el = document) => el.querySelector(s);
@@ -16,16 +18,24 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const iso = (d) => { const z = new Date(d); z.setMinutes(z.getMinutes() - z.getTimezoneOffset()); return z.toISOString().slice(0, 10); };
 const todayISO = () => iso(new Date());
 const addDays = (s, n) => { const d = new Date(s + 'T12:00'); d.setDate(d.getDate() + n); return iso(d); };
-const niceDate = (s) => new Date(s + 'T12:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const niceDate = (s) => new Date(s + 'T12:00').toLocaleDateString(locale(), { weekday: 'short', day: 'numeric', month: 'short' });
+const AR = () => getLang() === 'ar';
+// food names: main name in the chosen language, the other one underneath
+const fname = (f) => (AR() && f.ar ? f.ar : f.name);
+const fsub = (f) => (AR() ? (f.ar ? f.name : '') : f.ar || '');
+const subSpan = (f) => (fsub(f) ? ` <span class="muted small" dir="auto">${h(fsub(f))}</span>` : '');
+const P = () => t('P'), C = () => t('C'), F = () => t('F');
+const macroLine = (x) => `${r0(x.kcal)} ${t('kcal')} · ${t('Protein')} ${r0(x.p)} · ${t('Carbs')} ${r0(x.c)} · ${t('Fat')} ${r0(x.f)}`;
+const macroMini = (p, c, f) => `${P()} ${r1(p)} · ${C()} ${r1(c)} · ${F()} ${r1(f)}`;
 
 function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2200);
 }
-function confirmBox(msg, ok = 'Delete') {
+function confirmBox(msg, ok = t('Delete')) {
   return new Promise((res) => {
     const d = document.createElement('div'); d.className = 'modal';
-    d.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true"><p>${h(msg)}</p><div class="row gap"><button class="btn danger" data-ok>${h(ok)}</button><button class="btn ghost" data-no>Cancel</button></div></div>`;
+    d.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true"><p>${h(msg)}</p><div class="row gap"><button class="btn danger" data-ok>${h(ok)}</button><button class="btn ghost" data-no>${t('Cancel')}</button></div></div>`;
     document.body.append(d);
     d.addEventListener('click', (e) => {
       if (e.target.closest('[data-ok]')) { d.remove(); res(true); }
@@ -37,21 +47,23 @@ function confirmBox(msg, ok = 'Delete') {
 // ---------------- data ----------------
 const KEY = 'nt_data_v1';
 const MEALS = [
-  ['breakfast', 'Breakfast', 'فطار', 'b'],
-  ['lunch', 'Lunch', 'غدا', 'l'],
-  ['dinner', 'Dinner', 'عشا', 'd'],
-  ['snacks', 'Snacks', 'سناكس', 's'],
+  ['breakfast', 'Breakfast', 'b'],
+  ['lunch', 'Lunch', 'l'],
+  ['dinner', 'Dinner', 'd'],
+  ['snacks', 'Snacks', 's'],
 ];
+const mealName = (k) => t(MEALS.find((m) => m[0] === k)[1]);
 const blank = () => ({
   profile: { sex: 'female', age: 28, height: 165, weight: 70, activity: 1.375, goal: 'lose', rate: 0.5 },
   plans: [], activePlanId: null, log: {}, customFoods: [], favorites: [], recent: [],
-  settings: { apiKey: '', waterGoal: 8 },
+  settings: { apiKey: '', waterGoal: 8, lang: (navigator.language || '').startsWith('ar') ? 'ar' : 'en' },
 });
 let db = (() => { try { return Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { return blank(); } })();
 db.settings = Object.assign(blank().settings, db.settings || {});
+setLang(db.settings.lang);
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch (e) { alert('Could not save on this device: ' + e.message); }
+  catch (e) { alert(t('Could not save on this device: {x}', { x: e.message })); }
 }
 
 const allFoods = () => [...db.customFoods, ...FOODS];
@@ -59,11 +71,12 @@ const foodById = (id) => allFoods().find((f) => f.id === id);
 const activePlan = () => db.plans.find((p) => p.id === db.activePlanId) || db.plans[0] || null;
 const dayLog = (d) => (db.log[d] ||= { meals: { breakfast: [], lunch: [], dinner: [], snacks: [] }, water: 0 });
 const snap = (f) => ({ id: f.id, name: f.name, ar: f.ar || '', serving: f.serving, g: f.g, kcal: f.kcal, p: f.p, c: f.c, f: f.f });
+const servingTxt = (f) => srv(f.serving) + (f.g ? ` (${r0(f.g)} ${t('g')})` : '');
 
 function totals(entries) {
-  const t = { kcal: 0, p: 0, c: 0, f: 0 };
-  for (const e of entries) { t.kcal += e.food.kcal * e.qty; t.p += e.food.p * e.qty; t.c += e.food.c * e.qty; t.f += e.food.f * e.qty; }
-  return t;
+  const x = { kcal: 0, p: 0, c: 0, f: 0 };
+  for (const e of entries) { x.kcal += e.food.kcal * e.qty; x.p += e.food.p * e.qty; x.c += e.food.c * e.qty; x.f += e.food.f * e.qty; }
+  return x;
 }
 const dayTotals = (d) => { const L = db.log[d]; return L ? totals(Object.values(L.meals).flat()) : { kcal: 0, p: 0, c: 0, f: 0 }; };
 const dayHasFood = (d) => db.log[d] && Object.values(db.log[d].meals).some((a) => a.length);
@@ -92,7 +105,7 @@ const SPLITS = {
   keto: ['Keto', 25, 5, 70],
   mediterranean: ['Mediterranean', 20, 50, 30],
   endurance: ['Endurance / sport', 20, 60, 20],
-  custom: ['Custom', 30, 40, 30],
+  custom: ['Custom %', 30, 40, 30],
 };
 const MEAL_SHARE = {
   3: { breakfast: 0.3, lunch: 0.4, dinner: 0.3, snacks: 0 },
@@ -110,13 +123,18 @@ function calcTarget(pr) {
   if (pr.goal === 'lose') kcal = tdee - perDay;
   if (pr.goal === 'gain') kcal = tdee + perDay;
   const floor = pr.sex === 'male' ? 1500 : 1200;
-  const warn = kcal < floor ? `This is below the usual safe minimum (${floor} kcal). It was raised to ${floor}.` : '';
+  const warn = kcal < floor ? t('This is below the usual safe minimum ({x} kcal). It was raised to {x}.', { x: floor }) : '';
   kcal = Math.max(kcal, floor);
   return { bmr: r0(b), tdee: r0(tdee), kcal: Math.round(kcal / 10) * 10, warn };
 }
 function macroGrams(kcal, pP, cP, fP) {
   return { p: r0(kcal * pP / 100 / 4), c: r0(kcal * cP / 100 / 4), f: r0(kcal * fP / 100 / 9) };
 }
+function goalLabel(pr) {
+  if (!pr || pr.goal === 'maintain') return t('Maintain weight');
+  return t(pr.goal === 'lose' ? 'Lose {x} kg/week' : 'Gain {x} kg/week', { x: pr.rate });
+}
+const cuisineLabel = (c) => (c === 'eg' ? t('Egyptian') : c === 'intl' ? t('International') : t('Mixed'));
 
 // ---------------- meal plan generator ----------------
 function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
@@ -126,7 +144,7 @@ const SIDE_CATS = new Set(['Vegetables', 'Egyptian salads', 'Fruits', 'Dairy', '
 const SNACK_CATS = new Set(['Fruits', 'Nuts & snacks', 'Dairy', 'Healthy', 'Egyptian snacks', 'Proteins']);
 
 function buildMeal(meal, target, plan, rand, avoid) {
-  const tag = MEALS.find((m) => m[0] === meal)[3];
+  const tag = MEALS.find((m) => m[0] === meal)[2];
   const pool = allFoods().filter((f) => f.meals.includes(tag) && regionOK(f, plan.cuisine) && f.kcal > 0 && !avoid.has(f.id));
   const items = [];
   if (target < 60) return items;
@@ -188,7 +206,13 @@ function generateMealPlan(plan, seed = Date.now()) {
 
 // ---------------- rendering shell ----------------
 const app = $('#app');
-const state = { date: todayISO(), addMeal: null };
+const state = { date: todayISO() };
+function chrome() {
+  document.title = t('My Nutrition');
+  $$('[data-i18n]').forEach((el) => (el.textContent = t(el.dataset.i18n)));
+  const lb = $('#langBtn');
+  if (lb) { lb.textContent = AR() ? 'English' : 'عربي'; lb.setAttribute('aria-label', t('Language')); }
+}
 function route() {
   const [, page = 'today', a] = location.hash.split('/');
   $$('.tnav a').forEach((x) => x.classList.toggle('on', x.dataset.p === page));
@@ -197,77 +221,79 @@ function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', route);
+function switchLang(l) {
+  db.settings.lang = l; save(); setLang(l); chrome(); route();
+}
 
 // ring + bars
 function ring(eaten, target) {
   const pct = target ? Math.min(eaten / target, 1.5) : 0;
-  const R = 52, C = 2 * Math.PI * R, over = eaten > target;
-  return `<svg viewBox="0 0 130 130" class="ring" role="img" aria-label="${r0(eaten)} of ${r0(target)} kcal">
+  const R = 52, Cc = 2 * Math.PI * R, over = eaten > target;
+  return `<svg viewBox="0 0 130 130" class="ring" role="img" aria-label="${r0(eaten)} / ${r0(target)} ${t('kcal')}">
     <circle cx="65" cy="65" r="${R}" class="ring-bg"/>
-    <circle cx="65" cy="65" r="${R}" class="ring-fg ${over ? 'over' : ''}" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - Math.min(pct, 1))}" transform="rotate(-90 65 65)"/>
+    <circle cx="65" cy="65" r="${R}" class="ring-fg ${over ? 'over' : ''}" stroke-dasharray="${Cc}" stroke-dashoffset="${Cc * (1 - Math.min(pct, 1))}" transform="rotate(-90 65 65)"/>
     <text x="65" y="62" class="ring-big">${r0(Math.abs(target - eaten))}</text>
-    <text x="65" y="82" class="ring-sm">${over ? 'kcal over' : 'kcal left'}</text></svg>`;
+    <text x="65" y="82" class="ring-sm">${over ? t('kcal over') : t('kcal left')}</text></svg>`;
 }
 function bar(label, val, target, cls) {
   const pct = target ? Math.min(100, (val / target) * 100) : 0;
-  return `<div class="mbar"><div class="row between"><span>${label}</span><span class="muted small">${r0(val)} / ${r0(target)} g</span></div>
+  return `<div class="mbar"><div class="row between"><span>${label}</span><span class="muted small num">${r0(val)} / ${r0(target)} ${t('g')}</span></div>
     <div class="track"><div class="fill ${cls} ${val > target * 1.1 ? 'over' : ''}" style="width:${pct}%"></div></div></div>`;
 }
-const macroLine = (t) => `${r0(t.kcal)} kcal · P ${r0(t.p)} · C ${r0(t.c)} · F ${r0(t.f)}`;
 
 function targetsFor() {
   const p = activePlan();
-  return p ? p : { kcal: 2000, p: 100, c: 250, f: 67, name: 'Default (no plan yet)', mealsPerDay: 4 };
+  return p || { kcal: 2000, p: 100, c: 250, f: 67, name: t('Default (no plan yet)'), mealsPerDay: 4 };
 }
 
 // ---------------- TODAY ----------------
 function viewToday() {
-  const d = state.date, L = dayLog(d), T = targetsFor(), t = dayTotals(d), plan = activePlan();
+  const d = state.date, L = dayLog(d), T = targetsFor(), tt = dayTotals(d), plan = activePlan();
   const isToday = d === todayISO();
   app.innerHTML = `
   <div class="datebar">
-    <button class="btn ghost sm" data-day="-1" aria-label="Previous day">‹</button>
-    <label class="datepick"><b>${isToday ? 'Today' : niceDate(d)}</b> <input type="date" id="dpick" value="${d}"></label>
-    <button class="btn ghost sm" data-day="1" aria-label="Next day">›</button>
-    ${isToday ? '' : '<button class="btn ghost sm" data-today>Today</button>'}
+    <button class="btn ghost sm flip" data-day="-1" aria-label="${t('Previous day')}">‹</button>
+    <label class="datepick"><b>${isToday ? t('Today') : niceDate(d)}</b> <input type="date" id="dpick" value="${d}"></label>
+    <button class="btn ghost sm flip" data-day="1" aria-label="${t('Next day')}">›</button>
+    ${isToday ? '' : `<button class="btn ghost sm" data-today>${t('Today')}</button>`}
   </div>
-  ${plan ? '' : `<div class="alert warn">You have no nutrition plan yet. <a href="#/plan/new">Create your plan</a> to get your personal calorie target.</div>`}
+  ${plan ? '' : `<div class="alert warn">${t('You have no nutrition plan yet.')} <a href="#/plan/new">${t('Create your plan')}</a> ${t('to get your personal calorie target.')}</div>`}
   <div class="card summary">
-    ${ring(t.kcal, T.kcal)}
+    ${ring(tt.kcal, T.kcal)}
     <div class="sumright">
-      <div class="small muted">Plan: <b>${h(T.name)}</b> · target ${r0(T.kcal)} kcal · eaten ${r0(t.kcal)}</div>
-      ${bar('Protein', t.p, T.p, 'cp')}
-      ${bar('Carbs', t.c, T.c, 'cc')}
-      ${bar('Fat', t.f, T.f, 'cf')}
+      <div class="small muted">${t('Plan')}: <b>${h(T.name)}</b> · ${t('target')} ${r0(T.kcal)} ${t('kcal')} · ${t('eaten')} ${r0(tt.kcal)}</div>
+      ${bar(t('Protein'), tt.p, T.p, 'cp')}
+      ${bar(t('Carbs'), tt.c, T.c, 'cc')}
+      ${bar(t('Fat'), tt.f, T.f, 'cf')}
     </div>
   </div>
   <div class="card water">
-    <div class="row between"><b>💧 Water</b><span class="muted small">${L.water} / ${db.settings.waterGoal} glasses</span></div>
-    <div class="glasses">${Array.from({ length: Math.max(db.settings.waterGoal, L.water) }, (_, i) => `<button class="glass ${i < L.water ? 'on' : ''}" data-water="${i + 1}" aria-label="${i + 1} glasses"></button>`).join('')}</div>
+    <div class="row between"><b>💧 ${t('Water')}</b><span class="muted small">${L.water} / ${db.settings.waterGoal} ${t('glasses')}</span></div>
+    <div class="glasses">${Array.from({ length: Math.max(db.settings.waterGoal, L.water) }, (_, i) => `<button class="glass ${i < L.water ? 'on' : ''}" data-water="${i + 1}" aria-label="${i + 1}"></button>`).join('')}</div>
   </div>
   <div class="quick row gap wrap">
-    <button class="btn sm" data-scan="photo">📷 AI meal scan</button>
-    <button class="btn sm ghost" data-scan="barcode">▥ Scan barcode</button>
-    <button class="btn sm ghost" data-copy>Copy yesterday</button>
-    ${plan ? '<button class="btn sm ghost" data-logplan>Log my plan\'s menu</button>' : ''}
+    <button class="btn sm" data-scan="photo">📷 ${t('AI meal scan')}</button>
+    <button class="btn sm ghost" data-scan="barcode">▥ ${t('Scan barcode')}</button>
+    <button class="btn sm ghost" data-copy>${t('Copy yesterday')}</button>
+    ${plan ? `<button class="btn sm ghost" data-logplan>${t("Log my plan's menu")}</button>` : ''}
   </div>
-  ${MEALS.map(([k, label, ar]) => {
+  ${MEALS.map(([k]) => {
     const items = L.meals[k], mt = totals(items);
     const share = (MEAL_SHARE[T.mealsPerDay] || MEAL_SHARE[4])[k];
     return `<section class="card meal">
-      <div class="row between"><h3>${label} <span class="muted small" dir="rtl">${ar}</span></h3>
-        <span class="small muted">${r0(mt.kcal)}${share ? ' / ~' + r0(T.kcal * share) : ''} kcal</span></div>
+      <div class="row between"><h3>${mealName(k)}</h3>
+        <span class="small muted">${r0(mt.kcal)}${share ? ' / ~' + r0(T.kcal * share) : ''} ${t('kcal')}</span></div>
       ${items.length ? `<ul class="entries">${items.map((e) => `<li>
-          <div class="en-main"><b>${h(e.food.name)}</b>${e.food.ar ? ` <span class="muted small" dir="rtl">${h(e.food.ar)}</span>` : ''}
-          <div class="small muted">${r1(e.qty)} × ${h(e.food.serving)} · P ${r1(e.food.p * e.qty)} · C ${r1(e.food.c * e.qty)} · F ${r1(e.food.f * e.qty)}</div></div>
-          <div class="en-qty"><button class="qbtn" data-q="-0.5" data-e="${e.id}" data-m="${k}" aria-label="Less">−</button><span>${r0(e.food.kcal * e.qty)}</span><button class="qbtn" data-q="0.5" data-e="${e.id}" data-m="${k}" aria-label="More">+</button></div>
-          <button class="x" data-del="${e.id}" data-m="${k}" aria-label="Remove">×</button></li>`).join('')}</ul>` : '<p class="muted small empty">Nothing logged yet.</p>'}
-      <button class="btn ghost sm" data-add="${k}">+ Add food</button>
+          <div class="en-main"><b>${h(fname(e.food))}</b>${subSpan(e.food)}
+          <div class="small muted">${r1(e.qty)} × ${h(srv(e.food.serving))} · ${macroMini(e.food.p * e.qty, e.food.c * e.qty, e.food.f * e.qty)}</div></div>
+          <div class="en-qty"><button class="qbtn" data-q="-0.5" data-e="${e.id}" data-m="${k}" aria-label="${t('Less')}">−</button><span>${r0(e.food.kcal * e.qty)}</span><button class="qbtn" data-q="0.5" data-e="${e.id}" data-m="${k}" aria-label="${t('More')}">+</button></div>
+          <button class="x" data-del="${e.id}" data-m="${k}" aria-label="${t('Remove')}">×</button></li>`).join('')}</ul>` : `<p class="muted small empty">${t('Nothing logged yet.')}</p>`}
+      <button class="btn ghost sm" data-add="${k}">${t('+ Add food')}</button>
     </section>`;
   }).join('')}
-  <div class="card"><label class="fld"><span>Today's weight <em>kg (optional)</em></span>
-    <input type="number" step="0.1" inputmode="decimal" id="wt" value="${L.weight ?? ''}" placeholder="e.g. ${db.profile.weight}"></label>
-    <label class="fld"><span>Notes</span><textarea id="notes" rows="2" dir="auto" placeholder="How did today go?">${h(L.notes || '')}</textarea></label></div>`;
+  <div class="card"><label class="fld"><span>${t("Today's weight")} <em>${t('kg (optional)')}</em></span>
+    <input type="number" step="0.1" inputmode="decimal" id="wt" value="${L.weight ?? ''}" placeholder="${t('e.g. {x}', { x: db.profile.weight })}"></label>
+    <label class="fld"><span>${t('Notes')}</span><textarea id="notes" rows="2" dir="auto" placeholder="${t('How did today go?')}">${h(L.notes || '')}</textarea></label></div>`;
 
   app.onclick = async (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -283,18 +309,18 @@ function viewToday() {
     }
     if ('copy' in b.dataset) {
       const y = db.log[addDays(d, -1)];
-      if (!y || !Object.values(y.meals).some((a) => a.length)) return toast('Nothing logged yesterday.');
+      if (!y || !Object.values(y.meals).some((a) => a.length)) return toast(t('Nothing logged yesterday.'));
       for (const [m] of MEALS) L.meals[m].push(...y.meals[m].map((x) => ({ ...x, id: uid() })));
-      save(); toast('Copied yesterday\'s meals'); return viewToday();
+      save(); toast(t("Copied yesterday's meals")); return viewToday();
     }
     if ('logplan' in b.dataset) {
-      if (!plan.mealPlan) return toast('This plan has no menu yet. Open it in Plans.');
+      if (!plan.mealPlan) return toast(t('This plan has no menu yet. Open it in Plans.'));
       for (const [m] of MEALS) L.meals[m].push(...(plan.mealPlan[m] || []).map((x) => ({ id: uid(), food: { ...x.food }, qty: x.qty })));
-      save(); toast('Your plan\'s menu was added — edit anything you changed'); return viewToday();
+      save(); toast(t("Your plan's menu was added — edit anything you changed")); return viewToday();
     }
   };
   $('#dpick').onchange = (e) => { if (e.target.value) { state.date = e.target.value; viewToday(); } };
-  $('#wt').onchange = (e) => { const v = e.target.value; if (v === '') delete L.weight; else { L.weight = +v; db.profile.weight = +v; } save(); toast('Weight saved'); };
+  $('#wt').onchange = (e) => { const v = e.target.value; if (v === '') delete L.weight; else { L.weight = +v; db.profile.weight = +v; } save(); toast(t('Weight saved')); };
   $('#notes').onchange = (e) => { L.notes = e.target.value; save(); };
 }
 function guessMeal() {
@@ -305,71 +331,79 @@ function guessMeal() {
 // ---------------- ADD FOOD sheet ----------------
 function sheet(html) {
   const d = document.createElement('div'); d.className = 'sheet-wrap';
-  d.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><button class="x sheet-x" data-close aria-label="Close">×</button>${html}</div>`;
+  d.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><button class="x sheet-x" data-close aria-label="${t('Close')}">×</button>${html}</div>`;
   document.body.append(d); document.body.classList.add('noscroll');
-  const close = () => { d.dispatchEvent(new Event('closing')); d.remove(); document.body.classList.remove('noscroll'); };
+  const close = () => { d.dispatchEvent(new Event('closing')); d.remove(); if (!$('.sheet-wrap')) document.body.classList.remove('noscroll'); };
   d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-close]')) close(); });
   return { el: d.firstElementChild, wrap: d, close };
 }
 
+function regionTag(f) {
+  return f.region && f.region !== 'basic' ? `<span class="tag ${f.region}">${f.region === 'eg' ? t('Egyptian') : t('International')}</span>` : '';
+}
 function foodRow(f, extra = '') {
   return `<li class="frow" data-f="${h(f.id)}">
-    <div class="f-main"><b>${h(f.name)}</b>${f.ar ? ` <span class="muted small" dir="rtl">${h(f.ar)}</span>` : ''}
-      <div class="small muted">${h(f.serving)}${f.g ? ` (${r0(f.g)} g)` : ''} · P ${r1(f.p)} · C ${r1(f.c)} · F ${r1(f.f)} ${f.region && f.region !== 'basic' ? `<span class="tag ${f.region}">${REGION_LABEL[f.region]}</span>` : ''}${extra}</div></div>
-    <div class="f-kcal"><b>${r0(f.kcal)}</b><small>kcal</small></div>
-    <button class="btn sm" data-pick="${h(f.id)}" aria-label="Add ${h(f.name)}">+</button></li>`;
+    <div class="f-main"><b>${h(fname(f))}</b>${subSpan(f)}
+      <div class="small muted">${h(servingTxt(f))} · ${macroMini(f.p, f.c, f.f)} ${regionTag(f)}${extra}</div></div>
+    <div class="f-kcal"><b>${r0(f.kcal)}</b><small>${t('kcal')}</small></div>
+    <button class="btn sm" data-pick="${h(f.id)}" aria-label="${h(t('Add {x}', { x: fname(f) }))}">+</button></li>`;
 }
 
+// Arabic-friendly matching: ignore diacritics and treat أ إ آ ا / ة ه / ى ي as the same
+const norm = (s) => String(s || '').toLowerCase()
+  .replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
 function searchFoods(q, region = 'all', limit = 60) {
-  const s = q.trim().toLowerCase();
+  const s = norm(q.trim());
   let list = allFoods();
   if (region !== 'all') list = list.filter((f) => f.region === region || (region === 'custom' && (f.id.startsWith('c-') || f.id.startsWith('bc-'))));
   if (!s) return list.slice(0, limit);
   const words = s.split(/\s+/);
   return list.map((f) => {
-    const hay = (f.name + ' ' + (f.ar || '') + ' ' + f.cat).toLowerCase();
+    const hay = norm(f.name + ' ' + (f.ar || '') + ' ' + f.cat + ' ' + cat(f.cat));
     if (!words.every((w) => hay.includes(w))) return null;
-    return { f, score: (f.name.toLowerCase().startsWith(s) ? 0 : 1) + (hay.indexOf(words[0]) / 100) };
+    const starts = norm(f.name).startsWith(s) || norm(f.ar).startsWith(s);
+    return { f, score: (starts ? 0 : 1) + (hay.indexOf(words[0]) / 100) };
   }).filter(Boolean).sort((a, b) => a.score - b.score).slice(0, limit).map((x) => x.f);
 }
 
 function openAdd(meal, mode = 'search') {
-  const label = MEALS.find((m) => m[0] === meal)[1];
   const S = sheet(`
-    <h3>Add to <select id="addMeal" class="inline-sel">${MEALS.map(([k, l]) => `<option value="${k}" ${k === meal ? 'selected' : ''}>${l}</option>`).join('')}</select></h3>
+    <h3>${t('Add to')} <select id="addMeal" class="inline-sel">${MEALS.map(([k]) => `<option value="${k}" ${k === meal ? 'selected' : ''}>${mealName(k)}</option>`).join('')}</select></h3>
     <div class="tabs" id="addTabs">
-      <a href="#" data-t="search">Search</a><a href="#" data-t="photo">📷 AI scan</a><a href="#" data-t="barcode">▥ Barcode</a>
-      <a href="#" data-t="recent">Recent & ★</a><a href="#" data-t="custom">Custom</a>
+      <a href="#" data-t="search">${t('Search')}</a><a href="#" data-t="photo">📷 ${t('AI scan')}</a><a href="#" data-t="barcode">▥ ${t('Barcode')}</a>
+      <a href="#" data-t="recent">${t('Recent & ★')}</a><a href="#" data-t="custom">${t('Custom')}</a>
     </div>
     <div id="addBody"></div>`);
   let cleanup = () => {};
   S.wrap.addEventListener('closing', () => cleanup());
   const body = $('#addBody', S.el);
   const curMeal = () => $('#addMeal', S.el).value;
-  const added = (f, qty) => { addEntry(state.date, curMeal(), f, qty); toast(`Added ${f.name}`); if (location.hash.startsWith('#/today') || location.hash === '' || location.hash === '#/') viewToday(); };
+  const onToday = () => ['', '#', '#/', '#/today'].includes(location.hash);
+  const added = (f, qty) => { addEntry(state.date, curMeal(), f, qty); toast(t('Added {x}', { x: fname(f) })); if (onToday()) viewToday(); };
 
   // quantity picker for a food
   function pickQty(f) {
-    const Q = sheet(`<h3>${h(f.name)}</h3>${f.ar ? `<p class="muted" dir="rtl">${h(f.ar)}</p>` : ''}
-      <p class="small muted">1 serving = ${h(f.serving)}${f.g ? ` (${r0(f.g)} g)` : ''}</p>
-      <div class="g2"><label class="fld"><span>Servings</span><input type="number" id="qs" value="1" step="0.25" min="0.25" inputmode="decimal"></label>
-      <label class="fld"><span>or grams</span><input type="number" id="qg" value="${r0(f.g || 100)}" step="5" inputmode="decimal"></label></div>
+    const Q = sheet(`<h3>${h(fname(f))}</h3>${fsub(f) ? `<p class="muted" dir="auto">${h(fsub(f))}</p>` : ''}
+      <p class="small muted">${t('1 serving = {x}', { x: h(servingTxt(f)) })}</p>
+      <div class="g2"><label class="fld"><span>${t('Servings')}</span><input type="number" id="qs" value="1" step="0.25" min="0.25" inputmode="decimal"></label>
+      <label class="fld"><span>${t('or grams')}</span><input type="number" id="qg" value="${r0(f.g || 100)}" step="5" inputmode="decimal"></label></div>
       <div class="qchips">${[0.5, 1, 1.5, 2, 3].map((x) => `<button class="chip" data-x="${x}">${x}×</button>`).join('')}</div>
       <div class="needs" id="qprev"></div>
-      <div class="row gap"><button class="btn" id="qok">Add to ${h(MEALS.find((m) => m[0] === curMeal())[1])}</button>
-      <button class="btn ghost" id="qfav">${db.favorites.includes(f.id) ? '★ Favorite' : '☆ Favorite'}</button></div>`);
+      <div class="row gap wrap"><button class="btn" id="qok">${h(t('Add to {x}', { x: mealName(curMeal()) }))}</button>
+      <button class="btn ghost" id="qfav">${db.favorites.includes(f.id) ? t('★ Favorite') : t('☆ Favorite')}</button></div>`);
     const qs = $('#qs', Q.el), qg = $('#qg', Q.el);
-    const prev = () => { const q = +qs.value || 0; $('#qprev', Q.el).innerHTML = `<div class="need"><span>kcal</span><b>${r0(f.kcal * q)}</b></div><div class="need"><span>Protein</span><b>${r1(f.p * q)}</b><em>g</em></div><div class="need"><span>Carbs / Fat</span><b>${r0(f.c * q)}/${r0(f.f * q)}</b><em>g</em></div>`; };
+    const prev = () => {
+      const q = +qs.value || 0;
+      $('#qprev', Q.el).innerHTML = `<div class="need"><span>${t('kcal')}</span><b>${r0(f.kcal * q)}</b></div><div class="need"><span>${t('Protein')}</span><b>${r1(f.p * q)}</b><em>${t('g')}</em></div><div class="need"><span>${t('Carbs')} / ${t('Fat')}</span><b>${r0(f.c * q)}/${r0(f.f * q)}</b><em>${t('g')}</em></div>`;
+    };
     qs.oninput = () => { qg.value = r0((+qs.value || 0) * (f.g || 100)); prev(); };
     qg.oninput = () => { qs.value = Math.round((+qg.value || 0) / (f.g || 100) * 100) / 100; prev(); };
-    Q.el.addEventListener('click', (e) => {
-      const c = e.target.closest('[data-x]'); if (c) { qs.value = c.dataset.x; qs.oninput(); }
-    });
+    Q.el.addEventListener('click', (e) => { const c = e.target.closest('[data-x]'); if (c) { qs.value = c.dataset.x; qs.oninput(); } });
     $('#qok', Q.el).onclick = () => { const q = +qs.value; if (!q) return; added(f, q); Q.close(); };
     $('#qfav', Q.el).onclick = (e) => {
       db.favorites = db.favorites.includes(f.id) ? db.favorites.filter((x) => x !== f.id) : [f.id, ...db.favorites];
       if (f.id.startsWith('ai-') && !db.customFoods.some((x) => x.id === f.id)) db.customFoods.unshift({ ...f, meals: 'blds', region: 'basic', cat: 'My foods' });
-      save(); e.target.textContent = db.favorites.includes(f.id) ? '★ Favorite' : '☆ Favorite';
+      save(); e.target.textContent = db.favorites.includes(f.id) ? t('★ Favorite') : t('☆ Favorite');
     };
     prev();
   }
@@ -380,97 +414,100 @@ function openAdd(meal, mode = 'search') {
 
   const tabs = {
     search() {
-      body.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="Search: koshari, كشري, chicken, pizza…" autocomplete="off" dir="auto">
-        <select id="reg"><option value="all">All</option><option value="eg">Egyptian</option><option value="intl">International</option><option value="basic">Basic</option><option value="custom">My foods</option></select></div>
+      body.innerHTML = `<div class="toolbar"><input id="q" type="search" placeholder="${t('Search: koshari, كشري, chicken, pizza…')}" autocomplete="off" dir="auto">
+        <select id="reg"><option value="all">${t('All')}</option><option value="eg">${t('Egyptian')}</option><option value="intl">${t('International')}</option><option value="basic">${t('Basic')}</option><option value="custom">${t('My foods')}</option></select></div>
         <ul class="flist" id="res"></ul>`;
       const run = () => {
         const list = searchFoods($('#q', body).value, $('#reg', body).value);
-        $('#res', body).innerHTML = list.length ? list.map((f) => foodRow(f)).join('') : '<li class="muted">No match. Try the AI scan, or add it under Custom.</li>';
+        $('#res', body).innerHTML = list.length ? list.map((f) => foodRow(f)).join('') : `<li class="muted">${t('No match. Try the AI scan, or add it under Custom.')}</li>`;
       };
       $('#q', body).oninput = run; $('#reg', body).onchange = run; run();
       setTimeout(() => $('#q', body)?.focus(), 50);
     },
     recent() {
       const fav = db.favorites.map(foodById).filter(Boolean), rec = db.recent.map(foodById).filter(Boolean).filter((f) => !db.favorites.includes(f.id));
-      body.innerHTML = `<h4>★ Favorites</h4><ul class="flist">${fav.map((f) => foodRow(f)).join('') || '<li class="muted small">Tap ☆ Favorite when adding a food.</li>'}</ul>
-        <h4>Recently eaten</h4><ul class="flist">${rec.map((f) => foodRow(f)).join('') || '<li class="muted small">Nothing yet.</li>'}</ul>`;
+      body.innerHTML = `<h4>★ ${t('Favorites')}</h4><ul class="flist">${fav.map((f) => foodRow(f)).join('') || `<li class="muted small">${t('Tap ☆ Favorite when adding a food.')}</li>`}</ul>
+        <h4>${t('Recently eaten')}</h4><ul class="flist">${rec.map((f) => foodRow(f)).join('') || `<li class="muted small">${t('Nothing yet.')}</li>`}</ul>`;
     },
     custom() {
       body.innerHTML = customFoodForm();
       $('#cf', body).onsubmit = (e) => {
         e.preventDefault(); const f = readCustom(e.target); db.customFoods.unshift(f); save();
-        toast('Saved to My foods'); pickQty(f); e.target.reset();
+        toast(t('Saved to My foods')); pickQty(f); e.target.reset();
       };
     },
     barcode() {
-      body.innerHTML = `<p class="small muted">Point the camera at the barcode of a packaged product. Data from Open Food Facts.</p>
+      body.innerHTML = `<p class="small muted">${t('Point the camera at the barcode of a packaged product. Data from Open Food Facts.')}</p>
         <div class="cam"><video id="vid" playsinline muted></video><div class="cam-line"></div></div>
-        <p id="bcStatus" class="small">Starting camera…</p>
-        <form id="bcManual" class="row gap"><input id="bcCode" inputmode="numeric" placeholder="or type the barcode number"><button class="btn sm">Look up</button></form>
+        <p id="bcStatus" class="small">${t('Starting camera…')}</p>
+        <form id="bcManual" class="row gap"><input id="bcCode" inputmode="numeric" placeholder="${t('or type the barcode number')}"><button class="btn sm">${t('Look up')}</button></form>
         <ul class="flist" id="bcRes"></ul>`;
       const status = (m) => { const s = $('#bcStatus', body); if (s) s.textContent = m; };
       const found = async (code) => {
-        status(`Barcode ${code} — looking it up…`);
+        status(t('Barcode {x} — looking it up…', { x: code }));
         try {
           const local = db.customFoods.find((x) => x.barcode === code);
           const f = local || await lookupBarcode(code);
-          if (!f) { status(`Product ${code} was not found. Add it under Custom.`); return; }
+          if (!f) { status(t('Product {x} was not found. Add it under Custom.', { x: code })); return; }
           body._extra = { [f.id]: f };
           $('#bcRes', body).innerHTML = foodRow(f);
-          status('Found it. Tap + to add.');
+          status(t('Found it. Tap + to add.'));
           pickQty(f);
-        } catch { status('Could not reach the product database. Check your internet.'); }
+        } catch { status(t('Could not reach the product database. Check your internet.')); }
       };
       $('#bcManual', body).onsubmit = (e) => { e.preventDefault(); const c = $('#bcCode', body).value.trim(); if (c) found(c); };
-      if (!navigator.mediaDevices?.getUserMedia) { status('Camera is not available here. Type the barcode instead.'); return; }
+      if (!navigator.mediaDevices?.getUserMedia) { status(t('Camera is not available here. Type the barcode instead.')); return; }
       const sc = scanBarcode($('#vid', body));
       cleanup = sc.stop;
       sc.promise.then((code) => { status(''); found(code); })
-        .catch((err) => { if (err.message !== 'stopped') status('Camera could not start (' + (err.name || err.message) + '). Allow camera access, or type the barcode.'); });
-      status('Hold the barcode inside the frame.');
+        .catch((err) => { if (err.message !== 'stopped') status(t('Camera could not start ({x}). Allow camera access, or type the barcode.', { x: err.name || err.message })); });
+      status(t('Hold the barcode inside the frame.'));
     },
     photo() {
       const hasKey = !!db.settings.apiKey;
       body.innerHTML = `
-        ${hasKey ? '' : `<div class="alert warn">The AI scanner needs your own Anthropic API key. <a href="#/settings" data-close>Add it in Settings</a>. Until then, use Search or Barcode.</div>`}
-        <p class="small muted">Take a photo of your plate (or choose one), and/or describe it. The AI lists each food with estimated grams and calories — check and adjust before adding.</p>
+        ${hasKey ? '' : `<div class="alert warn">${t('The AI scanner needs your own Anthropic API key.')} <a href="#/settings" data-close>${t('Add it in Settings')}</a>. ${t('Until then, use Search or Barcode.')}</div>`}
+        <p class="small muted">${t('Take a photo of your plate (or choose one), and/or describe it. The AI lists each food with estimated grams and calories — check and adjust before adding.')}</p>
         <label class="photo-drop"><input type="file" accept="image/*" capture="environment" id="ph" hidden>
-          <span id="phLabel">📷 Take or choose a photo</span><img id="phPrev" alt="" hidden></label>
-        <label class="fld"><span>Description (optional)</span><input id="phTxt" dir="auto" placeholder="e.g. 2 ta'ameya sandwiches and tea with 2 sugars"></label>
-        <button class="btn" id="phGo" ${hasKey ? '' : 'disabled'}>Analyse meal</button>
+          <span id="phLabel">${t('📷 Take or choose a photo')}</span><img id="phPrev" alt="" hidden></label>
+        <label class="fld"><span>${t('Description (optional)')}</span><input id="phTxt" dir="auto" placeholder="${h(t("e.g. 2 ta'ameya sandwiches and tea with 2 sugars"))}"></label>
+        <button class="btn" id="phGo" ${hasKey ? '' : 'disabled'}>${t('Analyse meal')}</button>
         <div id="phOut"></div>`;
       let file = null;
       $('#ph', body).onchange = (e) => {
         file = e.target.files[0]; if (!file) return;
-        const img = $('#phPrev', body); img.src = URL.createObjectURL(file); img.hidden = false; $('#phLabel', body).textContent = 'Change photo';
+        const img = $('#phPrev', body); img.src = URL.createObjectURL(file); img.hidden = false; $('#phLabel', body).textContent = t('Change photo');
       };
       $('#phGo', body).onclick = async () => {
         const text = $('#phTxt', body).value.trim();
-        if (!file && !text) return toast('Add a photo or a description');
+        if (!file && !text) return toast(t('Add a photo or a description'));
         const out = $('#phOut', body), btn = $('#phGo', body);
-        btn.disabled = true; out.innerHTML = '<p class="muted"><span class="spin"></span> Analysing your meal…</p>';
+        btn.disabled = true; out.innerHTML = `<p class="muted"><span class="spin"></span> ${t('Analysing your meal…')}</p>`;
         try {
           const imageB64 = file ? await imageToBase64(file) : null;
-          const res = await analyzeMeal({ apiKey: db.settings.apiKey, imageB64, text });
+          const res = await analyzeMeal({ apiKey: db.settings.apiKey, imageB64, text, lang: getLang() });
           showAI(res, out);
-        } catch (err) { out.innerHTML = `<div class="alert bad">${h(aiErrorMessage(err))}</div>`; }
+        } catch (err) { out.innerHTML = `<div class="alert bad">${h(t(aiErrorMessage(err)))}</div>`; }
         btn.disabled = false;
       };
     },
   };
   function showAI(res, out) {
-    if (!res.items?.length) { out.innerHTML = `<div class="alert warn">${h(res.note || 'No food found.')}</div>`; return; }
+    if (!res.items?.length) { out.innerHTML = `<div class="alert warn">${h(res.note || t('No food found.'))}</div>`; return; }
     const items = res.items.map((it) => ({ ...it, on: true }));
     const draw = () => {
-      const t = items.filter((x) => x.on).reduce((a, x) => ({ kcal: a.kcal + x.kcal, p: a.p + x.protein, c: a.c + x.carbs, f: a.f + x.fat }), { kcal: 0, p: 0, c: 0, f: 0 });
+      const sum = items.filter((x) => x.on).reduce((a, x) => ({ kcal: a.kcal + x.kcal, p: a.p + x.protein, c: a.c + x.carbs, f: a.f + x.fat }), { kcal: 0, p: 0, c: 0, f: 0 });
       out.innerHTML = `<p class="small muted">${h(res.note || '')}</p>
-        <ul class="flist ai">${items.map((x, i) => `<li class="frow">
+        <ul class="flist ai">${items.map((x, i) => {
+          const fx = { name: x.name, ar: x.name_ar };
+          return `<li class="frow">
           <label class="chk"><input type="checkbox" data-on="${i}" ${x.on ? 'checked' : ''}></label>
-          <div class="f-main"><b>${h(x.name)}</b> <span class="muted small" dir="rtl">${h(x.name_ar)}</span>
-          <div class="small muted">P ${r1(x.protein)} · C ${r1(x.carbs)} · F ${r1(x.fat)} · <span class="tag ${x.confidence}">${x.confidence} confidence</span></div></div>
-          <label class="gram"><input type="number" value="${r0(x.grams)}" data-g="${i}" inputmode="decimal"><small>g</small></label>
-          <div class="f-kcal"><b>${r0(x.kcal)}</b><small>kcal</small></div></li>`).join('')}</ul>
-        <div class="row between"><b>Total: ${macroLine(t)}</b><button class="btn" id="aiAdd">Add selected</button></div>`;
+          <div class="f-main"><b>${h(fname(fx))}</b>${subSpan(fx)}
+          <div class="small muted">${macroMini(x.protein, x.carbs, x.fat)} · <span class="tag ${x.confidence}">${t('confidence')}: ${t(x.confidence)}</span></div></div>
+          <label class="gram"><input type="number" value="${r0(x.grams)}" data-g="${i}" inputmode="decimal"><small>${t('g')}</small></label>
+          <div class="f-kcal"><b>${r0(x.kcal)}</b><small>${t('kcal')}</small></div></li>`;
+        }).join('')}</ul>
+        <div class="row between"><b>${t('Total')}: ${macroLine(sum)}</b><button class="btn" id="aiAdd">${t('Add selected')}</button></div>`;
     };
     draw();
     out.onchange = (e) => {
@@ -486,64 +523,67 @@ function openAdd(meal, mode = 'search') {
       if (e.target.id !== 'aiAdd') return;
       const sel = items.filter((x) => x.on);
       for (const x of sel) {
-        const f = { id: 'ai-' + uid(), name: x.name, ar: x.name_ar, serving: `${r0(x.grams)} g (AI estimate)`, g: r0(x.grams), kcal: r0(x.kcal), p: r1(x.protein), c: r1(x.carbs), f: r1(x.fat), meals: 'blds' };
+        const f = { id: 'ai-' + uid(), name: x.name, ar: x.name_ar, serving: t('{x} g (AI estimate)', { x: r0(x.grams) }), g: r0(x.grams), kcal: r0(x.kcal), p: r1(x.protein), c: r1(x.carbs), f: r1(x.fat), meals: 'blds' };
         addEntry(state.date, curMeal(), f, 1);
       }
-      toast(`Added ${sel.length} item${sel.length === 1 ? '' : 's'}`); S.close(); viewToday();
+      toast(t('Added {x} items', { x: sel.length })); S.close(); if (onToday()) viewToday();
     };
   }
   const tabBar = $('#addTabs', S.el);
-  const go = (t) => { cleanup(); cleanup = () => {}; $$('a', tabBar).forEach((a) => a.classList.toggle('on', a.dataset.t === t)); tabs[t](); };
+  const go = (tab) => { cleanup(); cleanup = () => {}; $$('a', tabBar).forEach((a) => a.classList.toggle('on', a.dataset.t === tab)); tabs[tab](); };
   tabBar.onclick = (e) => { const a = e.target.closest('a'); if (a) { e.preventDefault(); go(a.dataset.t); } };
   go(mode);
 }
 
-function customFoodForm(f = {}) {
+function customFoodForm() {
   return `<form id="cf" class="g2">
-    <label class="fld span3"><span>Food name</span><input name="name" required dir="auto" value="${h(f.name || '')}"></label>
-    <label class="fld"><span>Arabic name (optional)</span><input name="ar" dir="rtl" value="${h(f.ar || '')}"></label>
-    <label class="fld"><span>Serving (e.g. 1 plate)</span><input name="serving" required value="${h(f.serving || '1 serving')}"></label>
-    <label class="fld"><span>Serving weight <em>g</em></span><input name="g" type="number" step="any" value="${f.g ?? 100}"></label>
-    <label class="fld"><span>Calories <em>kcal / serving</em></span><input name="kcal" type="number" step="any" required value="${f.kcal ?? ''}"></label>
-    <label class="fld"><span>Protein <em>g</em></span><input name="p" type="number" step="any" value="${f.p ?? 0}"></label>
-    <label class="fld"><span>Carbs <em>g</em></span><input name="c" type="number" step="any" value="${f.c ?? 0}"></label>
-    <label class="fld"><span>Fat <em>g</em></span><input name="f" type="number" step="any" value="${f.f ?? 0}"></label>
-    <label class="fld"><span>Type</span><select name="region"><option value="eg">Egyptian</option><option value="intl">International</option><option value="basic" selected>Basic</option></select></label>
-    <div class="span3"><button class="btn">Save food</button></div></form>`;
+    <label class="fld span3"><span>${t('Food name')}</span><input name="name" required dir="auto"></label>
+    <label class="fld"><span>${AR() ? t('English name (optional)') : t('Arabic name (optional)')}</span><input name="other" dir="auto"></label>
+    <label class="fld"><span>${t('Serving (e.g. 1 plate)')}</span><input name="serving" required dir="auto" value="${h(t('1 serving'))}"></label>
+    <label class="fld"><span>${t('Serving weight')} <em>${t('g')}</em></span><input name="g" type="number" step="any" value="100"></label>
+    <label class="fld"><span>${t('Calories')} <em>${t('kcal / serving')}</em></span><input name="kcal" type="number" step="any" required></label>
+    <label class="fld"><span>${t('Protein')} <em>${t('g')}</em></span><input name="p" type="number" step="any" value="0"></label>
+    <label class="fld"><span>${t('Carbs')} <em>${t('g')}</em></span><input name="c" type="number" step="any" value="0"></label>
+    <label class="fld"><span>${t('Fat')} <em>${t('g')}</em></span><input name="f" type="number" step="any" value="0"></label>
+    <label class="fld"><span>${t('Type')}</span><select name="region"><option value="eg">${t('Egyptian')}</option><option value="intl">${t('International')}</option><option value="basic" selected>${t('Basic')}</option></select></label>
+    <div class="span3"><button class="btn">${t('Save food')}</button></div></form>`;
 }
 function readCustom(form) {
   const v = Object.fromEntries(new FormData(form));
-  return { id: 'c-' + uid(), name: v.name.trim(), ar: v.ar.trim(), region: v.region, cat: 'My foods', serving: v.serving, g: +v.g || 100,
+  const main = v.name.trim(), other = v.other.trim();
+  // keep `name` in English and `ar` in Arabic, whichever language the form was filled in
+  const name = AR() ? (other || main) : main, ar = AR() ? main : other;
+  return { id: 'c-' + uid(), name, ar, region: v.region, cat: 'My foods', serving: v.serving, g: +v.g || 100,
     kcal: +v.kcal || 0, p: +v.p || 0, c: +v.c || 0, f: +v.f || 0, meals: 'blds' };
 }
 
 // ---------------- PLANS ----------------
 function viewPlans() {
   const act = activePlan();
-  app.innerHTML = `<div class="row between"><h2>My nutrition plans</h2><a class="btn" href="#/plan/new">+ New plan</a></div>
-    <p class="muted small">Make as many plans as you like (e.g. "Cutting", "Ramadan", "Maintenance"). The active plan sets your daily targets.</p>
+  app.innerHTML = `<div class="row between"><h2>${t('My nutrition plans')}</h2><a class="btn" href="#/plan/new">${t('+ New plan')}</a></div>
+    <p class="muted small">${t('Make as many plans as you like (e.g. "Cutting", "Ramadan", "Maintenance"). The active plan sets your daily targets.')}</p>
     ${db.plans.length ? `<div class="grid-cards">${db.plans.map((p) => `<div class="pcard plan ${act && act.id === p.id ? 'active' : ''}">
-      <div class="pc-top"><b>${h(p.name)}</b>${act && act.id === p.id ? '<span class="pill good">Active</span>' : ''}<span class="pill">${h(SPLITS[p.split]?.[0] || '')}</span></div>
-      <div class="big-kcal">${r0(p.kcal)} <small>kcal/day</small></div>
-      <div class="small muted">Protein ${p.p} g · Carbs ${p.c} g · Fat ${p.f} g · ${p.mealsPerDay} meals · ${p.cuisine === 'eg' ? 'Egyptian' : p.cuisine === 'intl' ? 'International' : 'Mixed'} food</div>
-      <div class="small muted">Goal: ${p.goalText || ''}</div>
+      <div class="pc-top"><b>${h(p.name)}</b>${act && act.id === p.id ? `<span class="pill good">${t('Active')}</span>` : ''}<span class="pill">${h(t(SPLITS[p.split]?.[0] || ''))}</span></div>
+      <div class="big-kcal">${r0(p.kcal)} <small>${t('kcal/day')}</small></div>
+      <div class="small muted">${t('Protein')} ${p.p} ${t('g')} · ${t('Carbs')} ${p.c} ${t('g')} · ${t('Fat')} ${p.f} ${t('g')} · ${p.mealsPerDay} ${t('meals')} · ${t('food')} ${cuisineLabel(p.cuisine)}</div>
+      <div class="small muted">${t('Goal')}: ${goalLabel(p.profile)}</div>
       <div class="row gap wrap" style="margin-top:.6rem">
-        ${act && act.id === p.id ? '' : `<button class="btn sm" data-act="${p.id}">Make active</button>`}
-        <a class="btn sm ghost" href="#/plan/${p.id}">Open / edit</a>
-        <button class="btn sm ghost" data-dup="${p.id}">Duplicate</button>
-        <button class="btn sm danger ghost" data-del="${p.id}">Delete</button>
-      </div></div>`).join('')}</div>` : `<div class="card center"><p>No plans yet.</p><a class="btn" href="#/plan/new">Create my first plan</a></div>`}`;
+        ${act && act.id === p.id ? '' : `<button class="btn sm" data-act="${p.id}">${t('Make active')}</button>`}
+        <a class="btn sm ghost" href="#/plan/${p.id}">${t('Open / edit')}</a>
+        <button class="btn sm ghost" data-dup="${p.id}">${t('Duplicate')}</button>
+        <button class="btn sm danger ghost" data-del="${p.id}">${t('Delete')}</button>
+      </div></div>`).join('')}</div>` : `<div class="card center"><p>${t('No plans yet.')}</p><a class="btn" href="#/plan/new">${t('Create my first plan')}</a></div>`}`;
   app.onclick = async (e) => {
     const b = e.target.closest('button'); if (!b) return;
-    if (b.dataset.act) { db.activePlanId = b.dataset.act; save(); toast('Plan activated'); viewPlans(); }
+    if (b.dataset.act) { db.activePlanId = b.dataset.act; save(); toast(t('Plan activated')); viewPlans(); }
     if (b.dataset.dup) {
       const p = db.plans.find((x) => x.id === b.dataset.dup);
-      const c = JSON.parse(JSON.stringify(p)); c.id = uid(); c.name = p.name + ' (copy)'; c.createdAt = new Date().toISOString();
+      const c = JSON.parse(JSON.stringify(p)); c.id = uid(); c.name = p.name + ' ' + t('(copy)'); c.createdAt = new Date().toISOString();
       db.plans.push(c); save(); viewPlans();
     }
     if (b.dataset.del) {
       const p = db.plans.find((x) => x.id === b.dataset.del);
-      if (!(await confirmBox(`Delete the plan "${p.name}"? Your food log is kept.`))) return;
+      if (!(await confirmBox(t('Delete the plan "{x}"? Your food log is kept.', { x: p.name })))) return;
       db.plans = db.plans.filter((x) => x.id !== p.id);
       if (db.activePlanId === p.id) db.activePlanId = db.plans[0]?.id || null;
       save(); viewPlans();
@@ -554,38 +594,37 @@ function viewPlans() {
 function viewPlanEdit(id) {
   const isNew = id === 'new' || !db.plans.some((p) => p.id === id);
   const pr = { ...db.profile };
-  const p = isNew ? { id: uid(), name: 'My plan', split: 'balanced', mealsPerDay: 4, cuisine: 'mixed', pP: 25, cP: 50, fP: 25, ...pr, profile: pr }
+  const p = isNew ? { id: uid(), name: t('My plan'), split: 'balanced', mealsPerDay: 4, cuisine: 'mixed', pP: 25, cP: 50, fP: 25, profile: pr }
     : JSON.parse(JSON.stringify(db.plans.find((x) => x.id === id)));
   const prof = p.profile || pr;
-  app.innerHTML = `<p><a href="#/plans">‹ All plans</a></p><h2>${isNew ? 'New nutrition plan' : 'Edit plan'}</h2>
+  const opt = (v, cur, label) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${label}</option>`;
+  app.innerHTML = `<p><a href="#/plans">${t('‹ All plans')}</a></p><h2>${isNew ? t('New nutrition plan') : t('Edit plan')}</h2>
   <form id="pf">
-    <div class="card"><h3>1 · About you</h3><div class="g3">
-      <label class="fld span3"><span>Plan name</span><input name="name" value="${h(p.name)}" required dir="auto"></label>
-      <label class="fld"><span>Sex</span><select name="sex"><option value="female" ${prof.sex === 'female' ? 'selected' : ''}>Female</option><option value="male" ${prof.sex === 'male' ? 'selected' : ''}>Male</option></select></label>
-      <label class="fld"><span>Age <em>years</em></span><input name="age" type="number" value="${prof.age}" required inputmode="numeric"></label>
-      <label class="fld"><span>Height <em>cm</em></span><input name="height" type="number" step="any" value="${prof.height}" required inputmode="decimal"></label>
-      <label class="fld"><span>Weight <em>kg</em></span><input name="weight" type="number" step="any" value="${prof.weight}" required inputmode="decimal"></label>
-      <label class="fld span2"><span>Activity</span><select name="activity">${ACTIVITY.map(([v, l]) => `<option value="${v}" ${+prof.activity === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div class="card"><h3>${t('1 · About you')}</h3><div class="g3">
+      <label class="fld span3"><span>${t('Plan name')}</span><input name="name" value="${h(p.name)}" required dir="auto"></label>
+      <label class="fld"><span>${t('Sex')}</span><select name="sex">${opt('female', prof.sex, t('Female'))}${opt('male', prof.sex, t('Male'))}</select></label>
+      <label class="fld"><span>${t('Age')} <em>${t('years')}</em></span><input name="age" type="number" value="${prof.age}" required inputmode="numeric"></label>
+      <label class="fld"><span>${t('Height')} <em>${t('cm')}</em></span><input name="height" type="number" step="any" value="${prof.height}" required inputmode="decimal"></label>
+      <label class="fld"><span>${t('Weight')} <em>${t('kg')}</em></span><input name="weight" type="number" step="any" value="${prof.weight}" required inputmode="decimal"></label>
+      <label class="fld span2"><span>${t('Activity')}</span><select name="activity">${ACTIVITY.map(([v, l]) => opt(v, +prof.activity, t(l))).join('')}</select></label>
     </div></div>
-    <div class="card"><h3>2 · Goal</h3><div class="g3">
-      <label class="fld"><span>Goal</span><select name="goal">
-        <option value="lose" ${prof.goal === 'lose' ? 'selected' : ''}>Lose weight</option><option value="maintain" ${prof.goal === 'maintain' ? 'selected' : ''}>Maintain</option><option value="gain" ${prof.goal === 'gain' ? 'selected' : ''}>Gain weight / muscle</option></select></label>
-      <label class="fld"><span>Speed <em>kg per week</em></span><select name="rate">${[0.25, 0.5, 0.75, 1].map((v) => `<option value="${v}" ${+prof.rate === v ? 'selected' : ''}>${v} kg</option>`).join('')}</select></label>
-      <label class="fld"><span>Override calories <em>optional</em></span><input name="override" type="number" value="${p.override || ''}" placeholder="auto" inputmode="numeric"></label>
+    <div class="card"><h3>${t('2 · Goal')}</h3><div class="g3">
+      <label class="fld"><span>${t('Goal')}</span><select name="goal">${opt('lose', prof.goal, t('Lose weight'))}${opt('maintain', prof.goal, t('Maintain'))}${opt('gain', prof.goal, t('Gain weight / muscle'))}</select></label>
+      <label class="fld"><span>${t('Speed')} <em>${t('kg per week')}</em></span><select name="rate">${[0.25, 0.5, 0.75, 1].map((v) => opt(v, +prof.rate, `${v} ${t('kg')}`)).join('')}</select></label>
+      <label class="fld"><span>${t('Override calories')} <em>${t('optional')}</em></span><input name="override" type="number" value="${p.override || ''}" placeholder="${t('auto')}" inputmode="numeric"></label>
     </div><div id="calcOut" class="calc"></div></div>
-    <div class="card"><h3>3 · Macros & meals</h3><div class="g3">
-      <label class="fld"><span>Diet style</span><select name="split">${Object.entries(SPLITS).map(([k, v]) => `<option value="${k}" ${p.split === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></label>
-      <label class="fld"><span>Protein <em>% kcal</em></span><input name="pP" type="number" value="${p.pP}"></label>
-      <label class="fld"><span>Carbs <em>% kcal</em></span><input name="cP" type="number" value="${p.cP}"></label>
-      <label class="fld"><span>Fat <em>% kcal</em></span><input name="fP" type="number" value="${p.fP}"></label>
-      <label class="fld"><span>Meals per day</span><select name="mealsPerDay">${[3, 4, 5].map((n) => `<option value="${n}" ${+p.mealsPerDay === n ? 'selected' : ''}>${n === 3 ? '3 meals' : n === 4 ? '3 meals + 1 snack' : '3 meals + 2 snacks'}</option>`).join('')}</select></label>
-      <label class="fld"><span>Food style</span><select name="cuisine">
-        <option value="mixed" ${p.cuisine === 'mixed' ? 'selected' : ''}>Mixed (Egyptian + international)</option><option value="eg" ${p.cuisine === 'eg' ? 'selected' : ''}>Mostly Egyptian</option><option value="intl" ${p.cuisine === 'intl' ? 'selected' : ''}>Mostly international</option></select></label>
+    <div class="card"><h3>${t('3 · Macros & meals')}</h3><div class="g3">
+      <label class="fld"><span>${t('Diet style')}</span><select name="split">${Object.entries(SPLITS).map(([k, v]) => opt(k, p.split, t(v[0]))).join('')}</select></label>
+      <label class="fld"><span>${t('Protein')} <em>${t('% kcal')}</em></span><input name="pP" type="number" value="${p.pP}"></label>
+      <label class="fld"><span>${t('Carbs')} <em>${t('% kcal')}</em></span><input name="cP" type="number" value="${p.cP}"></label>
+      <label class="fld"><span>${t('Fat')} <em>${t('% kcal')}</em></span><input name="fP" type="number" value="${p.fP}"></label>
+      <label class="fld"><span>${t('Meals per day')}</span><select name="mealsPerDay">${opt(3, p.mealsPerDay, t('3 meals'))}${opt(4, p.mealsPerDay, t('3 meals + 1 snack'))}${opt(5, p.mealsPerDay, t('3 meals + 2 snacks'))}</select></label>
+      <label class="fld"><span>${t('Food style')}</span><select name="cuisine">${opt('mixed', p.cuisine, t('Mixed (Egyptian + international)'))}${opt('eg', p.cuisine, t('Mostly Egyptian'))}${opt('intl', p.cuisine, t('Mostly international'))}</select></label>
     </div><div id="macroOut" class="needs"></div></div>
-    <div class="card"><div class="row between"><h3>4 · Daily menu</h3><button type="button" class="btn sm ghost" id="regen">↻ Generate new menu</button></div>
-      <p class="small muted">A sample day that fits your plan. Regenerate for new ideas, remove items, or add your own.</p>
+    <div class="card"><div class="row between"><h3>${t('4 · Daily menu')}</h3><button type="button" class="btn sm ghost" id="regen">${t('↻ Generate new menu')}</button></div>
+      <p class="small muted">${t('A sample day that fits your plan. Regenerate for new ideas, remove items, or add your own.')}</p>
       <div id="menu"></div></div>
-    <div class="savebar"><button class="btn">${isNew ? 'Save plan' : 'Save changes'}</button><label class="chk"><input type="checkbox" name="activate" ${isNew || db.activePlanId === p.id ? 'checked' : ''}> <span>Make this my active plan</span></label></div>
+    <div class="savebar"><button class="btn">${isNew ? t('Save plan') : t('Save changes')}</button><label class="chk"><input type="checkbox" name="activate" ${isNew || db.activePlanId === p.id ? 'checked' : ''}> <span>${t('Make this my active plan')}</span></label></div>
   </form>`;
   const form = $('#pf');
   const read = () => {
@@ -594,30 +633,30 @@ function viewPlanEdit(id) {
     return v;
   };
   const recalc = () => {
-    const v = read(); const t = calcTarget(v);
-    const kcal = +v.override || t.kcal;
+    const v = read(); const tg = calcTarget(v);
+    const kcal = +v.override || tg.kcal;
     const g = macroGrams(kcal, v.pP, v.cP, v.fP);
     const sum = v.pP + v.cP + v.fP;
-    $('#calcOut').innerHTML = `<p>BMR (Mifflin-St Jeor): <b>${t.bmr}</b> kcal · Daily burn (TDEE): <b>${t.tdee}</b> kcal</p>
-      <p>Your daily target: <b class="big-kcal-inline">${kcal} kcal</b> ${v.goal === 'lose' ? `(−${r0(v.rate * 1100)} kcal/day → about ${v.rate} kg/week)` : v.goal === 'gain' ? `(+${r0(v.rate * 1100)} kcal/day)` : ''}</p>
-      ${t.warn && !v.override ? `<p class="bad-t small">${t.warn}</p>` : ''}`;
-    $('#macroOut').innerHTML = `<div class="need"><span>Protein</span><b>${g.p} g</b><em>${r1(g.p / v.weight)} g/kg</em></div>
-      <div class="need"><span>Carbs</span><b>${g.c} g</b></div><div class="need"><span>Fat</span><b>${g.f} g</b></div>
-      ${sum !== 100 ? `<p class="bad-t small span3">Percentages add up to ${sum}%, they should add to 100%.</p>` : ''}`;
+    $('#calcOut').innerHTML = `<p>${t('BMR (Mifflin-St Jeor)')}: <b>${tg.bmr}</b> ${t('kcal')} · ${t('Daily burn (TDEE)')}: <b>${tg.tdee}</b> ${t('kcal')}</p>
+      <p>${t('Your daily target')}: <b class="big-kcal-inline">${kcal} ${t('kcal')}</b> ${v.goal === 'lose' ? t('(−{x} kcal/day → about {y} kg/week)', { x: r0(v.rate * 1100), y: v.rate }) : v.goal === 'gain' ? t('(+{x} kcal/day)', { x: r0(v.rate * 1100) }) : ''}</p>
+      ${tg.warn && !v.override ? `<p class="bad-t small">${tg.warn}</p>` : ''}`;
+    $('#macroOut').innerHTML = `<div class="need"><span>${t('Protein')}</span><b>${g.p} ${t('g')}</b><em>${r1(g.p / v.weight)} ${t('g/kg')}</em></div>
+      <div class="need"><span>${t('Carbs')}</span><b>${g.c} ${t('g')}</b></div><div class="need"><span>${t('Fat')}</span><b>${g.f} ${t('g')}</b></div>
+      ${sum !== 100 ? `<p class="bad-t small span3">${t('Percentages add up to {x}%, they should add to 100%.', { x: sum })}</p>` : ''}`;
     Object.assign(p, { kcal, ...g, cuisine: v.cuisine, mealsPerDay: v.mealsPerDay });
     return v;
   };
   const drawMenu = () => {
     if (!p.mealPlan) p.mealPlan = generateMealPlan(p);
     const share = MEAL_SHARE[p.mealsPerDay] || MEAL_SHARE[4];
-    const all = Object.values(p.mealPlan).flat(), t = totals(all);
-    $('#menu').innerHTML = MEALS.filter(([k]) => share[k] > 0 || p.mealPlan[k]?.length).map(([k, label, ar]) => {
+    const all = Object.values(p.mealPlan).flat(), tot = totals(all);
+    $('#menu').innerHTML = MEALS.filter(([k]) => share[k] > 0 || p.mealPlan[k]?.length).map(([k]) => {
       const it = p.mealPlan[k] || [], mt = totals(it);
-      return `<div class="menu-meal"><div class="row between"><b>${label} <span class="muted small" dir="rtl">${ar}</span></b><span class="small muted">${r0(mt.kcal)} / ~${r0(p.kcal * (share[k] || 0))} kcal</span></div>
-        <ul class="entries">${it.map((e, i) => `<li><div class="en-main">${h(e.food.name)} <span class="muted small" dir="rtl">${h(e.food.ar || '')}</span><div class="small muted">${r1(e.qty)} × ${h(e.food.serving)}</div></div>
-          <div class="en-qty"><span>${r0(e.food.kcal * e.qty)}</span></div><button type="button" class="x" data-rm="${k}:${i}" aria-label="Remove">×</button></li>`).join('')}</ul>
-        <button type="button" class="btn ghost sm" data-madd="${k}">+ Add</button></div>`;
-    }).join('') + `<p class="small"><b>Menu total: ${macroLine(t)}</b> <span class="muted">(target ${r0(p.kcal)} kcal)</span></p>`;
+      return `<div class="menu-meal"><div class="row between"><b>${mealName(k)}</b><span class="small muted">${r0(mt.kcal)} / ~${r0(p.kcal * (share[k] || 0))} ${t('kcal')}</span></div>
+        <ul class="entries">${it.map((e, i) => `<li><div class="en-main">${h(fname(e.food))}${subSpan(e.food)}<div class="small muted">${r1(e.qty)} × ${h(srv(e.food.serving))}</div></div>
+          <div class="en-qty"><span>${r0(e.food.kcal * e.qty)}</span></div><button type="button" class="x" data-rm="${k}:${i}" aria-label="${t('Remove')}">×</button></li>`).join('')}</ul>
+        <button type="button" class="btn ghost sm" data-madd="${k}">${t('+ Add')}</button></div>`;
+    }).join('') + `<p class="small"><b>${t('Menu total')}: ${macroLine(tot)}</b> <span class="muted">(${t('target')} ${r0(p.kcal)} ${t('kcal')})</span></p>`;
   };
   form.addEventListener('input', (e) => {
     if (e.target.name === 'split' && e.target.value !== 'custom') {
@@ -633,7 +672,7 @@ function viewPlanEdit(id) {
     const ad = e.target.closest('[data-madd]');
     if (ad) {
       const k = ad.dataset.madd;
-      const S = sheet(`<h3>Add to ${k}</h3><div class="toolbar"><input id="mq" type="search" placeholder="Search foods" dir="auto"></div><ul class="flist" id="mres"></ul>`);
+      const S = sheet(`<h3>${h(t('Add to {x}', { x: mealName(k) }))}</h3><div class="toolbar"><input id="mq" type="search" placeholder="${t('Search foods')}" dir="auto"></div><ul class="flist" id="mres"></ul>`);
       const run = () => { $('#mres', S.el).innerHTML = searchFoods($('#mq', S.el).value).map((f) => foodRow(f)).join(''); };
       $('#mq', S.el).oninput = run; run();
       S.el.addEventListener('click', (ev) => {
@@ -645,29 +684,28 @@ function viewPlanEdit(id) {
   };
   form.onsubmit = (e) => {
     e.preventDefault(); const v = recalc();
-    if (v.pP + v.cP + v.fP !== 100) return toast('Macro percentages must add up to 100%');
-    const goalText = v.goal === 'maintain' ? 'Maintain weight' : `${v.goal === 'lose' ? 'Lose' : 'Gain'} ${v.rate} kg/week`;
+    if (v.pP + v.cP + v.fP !== 100) return toast(t('Macro percentages must add up to 100%'));
     const profile = { sex: v.sex, age: v.age, height: v.height, weight: v.weight, activity: v.activity, goal: v.goal, rate: v.rate };
-    Object.assign(p, { name: v.name, split: v.split, pP: v.pP, cP: v.cP, fP: v.fP, override: +v.override || null, goalText, profile, updatedAt: new Date().toISOString() });
+    Object.assign(p, { name: v.name, split: v.split, pP: v.pP, cP: v.cP, fP: v.fP, override: +v.override || null, profile, updatedAt: new Date().toISOString() });
     if (isNew) { p.createdAt = new Date().toISOString(); db.plans.push(p); } else db.plans[db.plans.findIndex((x) => x.id === p.id)] = p;
     db.profile = profile;
     if (v.activate) db.activePlanId = p.id;
-    save(); toast('Plan saved'); location.hash = '#/plans';
+    save(); toast(t('Plan saved')); location.hash = '#/plans';
   };
   recalc(); drawMenu();
 }
 
 // ---------------- RECOMMENDATIONS ----------------
 function viewRecommend() {
-  const d = todayISO(), T = targetsFor(), t = dayTotals(d);
-  const left = { kcal: T.kcal - t.kcal, p: T.p - t.p, c: T.c - t.c, f: T.f - t.f };
+  const d = todayISO(), T = targetsFor(), tt = dayTotals(d);
+  const left = { kcal: T.kcal - tt.kcal, p: T.p - tt.p, c: T.c - tt.c, f: T.f - tt.f };
   const st = viewRecommend.st ||= { meal: guessMeal(), region: activePlan()?.cuisine || 'mixed' };
   const share = (MEAL_SHARE[T.mealsPerDay] || MEAL_SHARE[4])[st.meal] || 0.15;
   const L = db.log[d];
   const mealDone = L ? totals(L.meals[st.meal]).kcal : 0;
   // budget for this meal: its share of the day, but never more than what is left
   const budget = Math.max(0, Math.min(left.kcal, Math.max(T.kcal * share - mealDone, left.kcal > 0 ? Math.min(left.kcal, 150) : 0)));
-  const tag = MEALS.find((m) => m[0] === st.meal)[3];
+  const tag = MEALS.find((m) => m[0] === st.meal)[2];
   const pool = allFoods().filter((f) => f.meals.includes(tag) && regionOK(f, st.region) && f.kcal > 0);
   const needP = left.p > 0 ? left.p / Math.max(left.kcal, 1) : 0; // g protein still needed per kcal left
   const score = (f) => {
@@ -677,7 +715,7 @@ function viewRecommend() {
     return fitK - Math.min(pd, 0.15) * (needP > 0.06 ? 8 : 3) + fatPen;
   };
   const fits = pool.filter((f) => f.kcal <= Math.max(budget * 1.15, 120)).sort((a, b) => score(a) - score(b));
-  const pick = (cats, n) => fits.filter((f) => cats(f)).slice(0, n);
+  const pick = (test, n) => fits.filter(test).slice(0, n);
   const egPicks = pick((f) => f.region === 'eg', 6), intlPicks = pick((f) => f.region === 'intl', 6);
   const highP = pool.filter((f) => f.kcal <= Math.max(budget, 250)).sort((a, b) => b.p / b.kcal - a.p / a.kcal).slice(0, 6);
   const light = allFoods().filter((f) => f.kcal > 0 && f.kcal <= 100 && f.meals.includes('s')).sort((a, b) => b.p / b.kcal - a.p / a.kcal).slice(0, 6);
@@ -695,43 +733,44 @@ function viewRecommend() {
     }
   }
   const tips = [];
-  if (left.kcal < 0) tips.push(`You are ${r0(-left.kcal)} kcal over today. Choose water, tea without sugar, salad or vegetables if you are still hungry, and a walk helps.`);
-  if (left.p > 30 && left.kcal > 0) tips.push(`You still need ${r0(left.p)} g protein. Good Egyptian picks: gebna areesh, eggs, ful, grilled chicken or fish, termes, Greek yogurt.`);
-  if (L && L.water < db.settings.waterGoal / 2 && new Date().getHours() > 14) tips.push(`Only ${L.water} glasses of water so far. Aim for ${db.settings.waterGoal}.`);
-  if (left.f < 5 && left.kcal > 200) tips.push('Your fat budget is almost used. Prefer grilled or boiled foods over fried ones, and go easy on oil, tahini and ghee.');
-  if (left.c < 0) tips.push('Carbs are over target. Swap bread or rice for extra vegetables or salad at the next meal.');
-  if (!tips.length) tips.push('You are on track. Keep meals balanced: a protein, a vegetable or salad, and a carb portion that fits.');
+  if (left.kcal < 0) tips.push(t('You are {x} kcal over today. Choose water, tea without sugar, salad or vegetables if you are still hungry, and a walk helps.', { x: r0(-left.kcal) }));
+  if (left.p > 30 && left.kcal > 0) tips.push(t('You still need {x} g protein. Good Egyptian picks: gebna areesh, eggs, ful, grilled chicken or fish, termes, Greek yogurt.', { x: r0(left.p) }));
+  if (L && L.water < db.settings.waterGoal / 2 && new Date().getHours() > 14) tips.push(t('Only {x} glasses of water so far. Aim for {y}.', { x: L.water, y: db.settings.waterGoal }));
+  if (left.f < 5 && left.kcal > 200) tips.push(t('Your fat budget is almost used. Prefer grilled or boiled foods over fried ones, and go easy on oil, tahini and ghee.'));
+  if (left.c < 0) tips.push(t('Carbs are over target. Swap bread or rice for extra vegetables or salad at the next meal.'));
+  if (!tips.length) tips.push(t('You are on track. Keep meals balanced: a protein, a vegetable or salad, and a carb portion that fits.'));
 
-  const card = (f) => `<div class="rcard"><div><b>${h(f.name)}</b>${f.ar ? `<div class="muted small" dir="rtl">${h(f.ar)}</div>` : ''}
-      <div class="small muted">${h(f.serving)} · P ${r1(f.p)} · C ${r1(f.c)} · F ${r1(f.f)}</div></div>
-      <div class="rc-r"><b>${r0(f.kcal)}</b><small>kcal</small><button class="btn sm" data-radd="${h(f.id)}">+ Add</button></div></div>`;
+  const card = (f) => `<div class="rcard"><div><b>${h(fname(f))}</b>${fsub(f) ? `<div class="muted small" dir="auto">${h(fsub(f))}</div>` : ''}
+      <div class="small muted">${h(srv(f.serving))} · ${macroMini(f.p, f.c, f.f)}</div></div>
+      <div class="rc-r"><b>${r0(f.kcal)}</b><small>${t('kcal')}</small><button class="btn sm" data-radd="${h(f.id)}">${t('+ Add')}</button></div></div>`;
   const section = (title, list, sub = '') => list.length ? `<h3>${title}</h3>${sub ? `<p class="small muted">${sub}</p>` : ''}<div class="rgrid">${list.map(card).join('')}</div>` : '';
+  const mn = mealName(st.meal);
 
-  app.innerHTML = `<h2>Meal recommendations</h2>
+  app.innerHTML = `<h2>${t('Meal recommendations')}</h2>
     <div class="card summary-sm">
       <div class="needs">
-        <div class="need"><span>kcal left today</span><b class="${left.kcal < 0 ? 'bad-t' : ''}">${r0(left.kcal)}</b></div>
-        <div class="need"><span>Protein left</span><b>${r0(Math.max(0, left.p))}</b><em>g</em></div>
-        <div class="need"><span>Budget for ${st.meal}</span><b>${r0(budget)}</b><em>kcal</em></div>
+        <div class="need"><span>${t('kcal left today')}</span><b dir="ltr" class="${left.kcal < 0 ? 'bad-t' : ''}">${r0(left.kcal)}</b></div>
+        <div class="need"><span>${t('Protein left')}</span><b>${r0(Math.max(0, left.p))}</b><em>${t('g')}</em></div>
+        <div class="need"><span>${t('Budget for {x}', { x: mn })}</span><b>${r0(budget)}</b><em>${t('kcal')}</em></div>
       </div>
-      <div class="chips">${MEALS.map(([k, l]) => `<button class="chip ${st.meal === k ? 'on' : ''}" data-meal="${k}">${l}</button>`).join('')}</div>
-      <div class="chips">${[['mixed', 'All food'], ['eg', 'Egyptian'], ['intl', 'International']].map(([k, l]) => `<button class="chip ${st.region === k ? 'on' : ''}" data-reg="${k}">${l}</button>`).join('')}</div>
+      <div class="chips">${MEALS.map(([k]) => `<button class="chip ${st.meal === k ? 'on' : ''}" data-meal="${k}">${mealName(k)}</button>`).join('')}</div>
+      <div class="chips">${[['mixed', t('All food')], ['eg', t('Egyptian')], ['intl', t('International')]].map(([k, l]) => `<button class="chip ${st.region === k ? 'on' : ''}" data-reg="${k}">${l}</button>`).join('')}</div>
     </div>
-    <div class="card"><h3>💡 Tips for you</h3><ul class="tips">${tips.map((x) => `<li>${h(x)}</li>`).join('')}</ul></div>
-    ${combos.length ? `<h3>Complete ${st.meal} ideas</h3><div class="rgrid">${combos.map(([m, s]) => `<div class="rcard combo"><div><b>${h(m.name)}</b> + <b>${h(s.name)}</b>
-       <div class="small muted">${h(m.serving)} + ${h(s.serving)} · P ${r1(m.p + s.p)} g</div></div>
-       <div class="rc-r"><b>${r0(m.kcal + s.kcal)}</b><small>kcal</small><button class="btn sm" data-combo="${h(m.id)}|${h(s.id)}">+ Add both</button></div></div>`).join('')}</div>` : ''}
-    ${st.region !== 'intl' ? section('🇪🇬 Egyptian picks that fit', egPicks) : ''}
-    ${st.region !== 'eg' ? section('🌍 International picks that fit', intlPicks) : ''}
-    ${section('💪 High-protein choices', highP, 'Most protein for the calories.')}
-    ${section('★ Your favorites that fit', favFit)}
-    ${section('🥗 Light snacks (≤ 100 kcal)', light, 'For when you are hungry but close to your target.')}`;
+    <div class="card"><h3>${t('💡 Tips for you')}</h3><ul class="tips">${tips.map((x) => `<li>${h(x)}</li>`).join('')}</ul></div>
+    ${combos.length ? `<h3>${t('Complete {x} ideas', { x: mn })}</h3><div class="rgrid">${combos.map(([m, s]) => `<div class="rcard combo"><div><b>${h(fname(m))}</b> + <b>${h(fname(s))}</b>
+       <div class="small muted">${h(srv(m.serving))} + ${h(srv(s.serving))} · ${P()} ${r1(m.p + s.p)} ${t('g')}</div></div>
+       <div class="rc-r"><b>${r0(m.kcal + s.kcal)}</b><small>${t('kcal')}</small><button class="btn sm" data-combo="${h(m.id)}|${h(s.id)}">${t('+ Add both')}</button></div></div>`).join('')}</div>` : ''}
+    ${st.region !== 'intl' ? section(t('🇪🇬 Egyptian picks that fit'), egPicks) : ''}
+    ${st.region !== 'eg' ? section(t('🌍 International picks that fit'), intlPicks) : ''}
+    ${section(t('💪 High-protein choices'), highP, t('Most protein for the calories.'))}
+    ${section(t('★ Your favorites that fit'), favFit)}
+    ${section(t('🥗 Light snacks (≤ 100 kcal)'), light, t('For when you are hungry but close to your target.'))}`;
   app.onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.meal) { st.meal = b.dataset.meal; return viewRecommend(); }
     if (b.dataset.reg) { st.region = b.dataset.reg; return viewRecommend(); }
-    if (b.dataset.radd) { const f = foodById(b.dataset.radd); addEntry(d, st.meal, f, 1); toast(`Added ${f.name} to ${st.meal}`); return viewRecommend(); }
-    if (b.dataset.combo) { b.dataset.combo.split('|').forEach((id) => addEntry(d, st.meal, foodById(id), 1)); toast(`Added to ${st.meal}`); return viewRecommend(); }
+    if (b.dataset.radd) { const f = foodById(b.dataset.radd); addEntry(d, st.meal, f, 1); toast(t('Added {x} to {y}', { x: fname(f), y: mn })); return viewRecommend(); }
+    if (b.dataset.combo) { b.dataset.combo.split('|').forEach((id) => addEntry(d, st.meal, foodById(id), 1)); toast(t('Added to {x}', { x: mn })); return viewRecommend(); }
   };
 }
 
@@ -748,28 +787,30 @@ function viewHistory() {
   const max = Math.max(T.kcal * 1.3, ...rows.map((r) => r.t.kcal));
   const W = 640, H = 220, pad = 30, bw = (W - pad * 2) / rows.length;
   const y = (v) => H - pad - (v / max) * (H - pad * 2);
-  const chart = `<svg viewBox="0 0 ${W} ${H}" class="hchart" role="img" aria-label="Calories per day">
+  // in Arabic the days run right-to-left like the text
+  const xAt = (i) => (AR() ? W - pad - (i + 1) * bw : pad + i * bw);
+  const chart = `<svg viewBox="0 0 ${W} ${H}" class="hchart" role="img" aria-label="${t('Calories per day')}">
     <line x1="${pad}" x2="${W - pad}" y1="${y(T.kcal)}" y2="${y(T.kcal)}" class="h-target"/>
-    <text x="${W - pad}" y="${y(T.kcal) - 5}" class="h-lab" text-anchor="end">target ${r0(T.kcal)}</text>
+    <text x="${AR() ? pad : W - pad}" y="${y(T.kcal) - 5}" class="h-lab" text-anchor="${AR() ? 'start' : 'end'}">${t('target')} ${r0(T.kcal)}</text>
     ${rows.map((r, i) => {
-      const x = pad + i * bw + bw * 0.15, w = bw * 0.7, over = r.t.kcal > T.kcal * 1.1;
-      return `<rect x="${x}" y="${y(r.t.kcal)}" width="${w}" height="${Math.max(0, H - pad - y(r.t.kcal))}" rx="3" class="h-bar ${over ? 'over' : ''}"><title>${niceDate(r.d)}: ${r0(r.t.kcal)} kcal</title></rect>
-        ${rows.length <= 14 || i % 5 === 0 ? `<text x="${x + w / 2}" y="${H - 10}" class="h-lab" text-anchor="middle">${new Date(r.d + 'T12:00').toLocaleDateString(undefined, rows.length <= 7 ? { weekday: 'short' } : { day: 'numeric', month: 'numeric' })}</text>` : ''}`;
+      const x = xAt(i) + bw * 0.15, w = bw * 0.7, over = r.t.kcal > T.kcal * 1.1;
+      return `<rect x="${x}" y="${y(r.t.kcal)}" width="${w}" height="${Math.max(0, H - pad - y(r.t.kcal))}" rx="3" class="h-bar ${over ? 'over' : ''}"><title>${niceDate(r.d)}: ${r0(r.t.kcal)} ${t('kcal')}</title></rect>
+        ${rows.length <= 14 || i % 5 === 0 ? `<text x="${x + w / 2}" y="${H - 10}" class="h-lab" text-anchor="middle">${new Date(r.d + 'T12:00').toLocaleDateString(locale(), rows.length <= 7 ? { weekday: 'short' } : { day: 'numeric', month: 'numeric' })}</text>` : ''}`;
     }).join('')}</svg>`;
   const weights = Object.entries(db.log).filter(([, v]) => v.weight).sort(([a], [b]) => a.localeCompare(b));
-  app.innerHTML = `<h2>History & progress</h2>
-    <div class="chips">${[7, 14, 30].map((n) => `<button class="chip ${st.days === n ? 'on' : ''}" data-days="${n}">${n} days</button>`).join('')}</div>
+  app.innerHTML = `<h2>${t('History & progress')}</h2>
+    <div class="chips">${[7, 14, 30].map((n) => `<button class="chip ${st.days === n ? 'on' : ''}" data-days="${n}">${t('{x} days', { x: n })}</button>`).join('')}</div>
     <div class="needs four">
-      <div class="need"><span>Avg kcal</span><b>${r0(avg('kcal'))}</b><em>target ${r0(T.kcal)}</em></div>
-      <div class="need"><span>Avg protein</span><b>${r0(avg('p'))}</b><em>g (target ${T.p})</em></div>
-      <div class="need"><span>Days on target</span><b>${onTarget}/${logged.length}</b><em>within ±10%</em></div>
-      <div class="need"><span>Streak</span><b>${streak}</b><em>day${streak === 1 ? '' : 's'} logged</em></div>
+      <div class="need"><span>${t('Avg kcal')}</span><b>${r0(avg('kcal'))}</b><em>${t('target')} ${r0(T.kcal)}</em></div>
+      <div class="need"><span>${t('Avg protein')}</span><b>${r0(avg('p'))}</b><em>${t('g')} (${t('target')} ${T.p})</em></div>
+      <div class="need"><span>${t('Days on target')}</span><b>${onTarget}/${logged.length}</b><em>${t('within ±10%')}</em></div>
+      <div class="need"><span>${t('Streak')}</span><b>${streak}</b><em>${t('days logged')}</em></div>
     </div>
     <div class="card">${chart}</div>
-    <div class="card"><h3>Daily log</h3><div class="tablewrap"><table class="tbl"><thead><tr><th>Day</th><th>kcal</th><th>P</th><th>C</th><th>F</th><th>Water</th><th>Weight</th></tr></thead>
+    <div class="card"><h3>${t('Daily log')}</h3><div class="tablewrap"><table class="tbl"><thead><tr><th>${t('Day')}</th><th>${t('kcal')}</th><th>${P()}</th><th>${C()}</th><th>${F()}</th><th>${t('Water')}</th><th>${t('Weight')}</th></tr></thead>
       <tbody>${rows.slice().reverse().map((r) => `<tr><td><a href="#/today" data-go="${r.d}">${niceDate(r.d)}</a></td><td>${r.logged ? r0(r.t.kcal) : '—'}</td><td>${r.logged ? r0(r.t.p) : ''}</td><td>${r.logged ? r0(r.t.c) : ''}</td><td>${r.logged ? r0(r.t.f) : ''}</td><td>${r.water || ''}</td><td>${r.w ?? ''}</td></tr>`).join('')}</tbody></table></div></div>
-    <div class="card"><h3>Weight</h3>${weights.length ? `<p>Start: <b>${weights[0][1].weight} kg</b> (${niceDate(weights[0][0])}) · Latest: <b>${weights.at(-1)[1].weight} kg</b> (${niceDate(weights.at(-1)[0])}) ·
-      Change: <b>${r1(weights.at(-1)[1].weight - weights[0][1].weight)} kg</b></p>${weightChart(weights)}` : '<p class="muted small">Log your weight on the Today page to see your progress here.</p>'}</div>`;
+    <div class="card"><h3>${t('Weight')}</h3>${weights.length ? `<p>${t('Start')}: <b>${weights[0][1].weight} ${t('kg')}</b> (${niceDate(weights[0][0])}) · ${t('Latest')}: <b>${weights.at(-1)[1].weight} ${t('kg')}</b> (${niceDate(weights.at(-1)[0])}) ·
+      ${t('Change')}: <b><span dir="ltr">${r1(weights.at(-1)[1].weight - weights[0][1].weight)}</span> ${t('kg')}</b></p>${weightChart(weights)}` : `<p class="muted small">${t('Log your weight on the Today page to see your progress here.')}</p>`}</div>`;
   app.onclick = (e) => {
     const b = e.target.closest('[data-days]'); if (b) { st.days = +b.dataset.days; viewHistory(); }
     const g = e.target.closest('[data-go]'); if (g) state.date = g.dataset.go;
@@ -779,62 +820,67 @@ function weightChart(ws) {
   if (ws.length < 2) return '';
   const W = 640, H = 180, pad = 34, vals = ws.map(([, v]) => v.weight), lo = Math.min(...vals) - 1, hi = Math.max(...vals) + 1;
   const t0 = new Date(ws[0][0]).getTime(), t1 = new Date(ws.at(-1)[0]).getTime() || t0 + 1;
-  const x = (d) => pad + ((new Date(d).getTime() - t0) / Math.max(t1 - t0, 1)) * (W - pad * 2);
+  const fr = (d) => (new Date(d).getTime() - t0) / Math.max(t1 - t0, 1);
+  const x = (d) => (AR() ? W - pad - fr(d) * (W - pad * 2) : pad + fr(d) * (W - pad * 2));
   const y = (v) => H - pad - ((v - lo) / (hi - lo)) * (H - pad * 2);
+  const lx = AR() ? W - 4 : 4, anchor = AR() ? 'end' : 'start';
   const pts = ws.map(([d, v]) => `${x(d)},${y(v.weight)}`).join(' ');
-  return `<svg viewBox="0 0 ${W} ${H}" class="hchart"><text x="4" y="${y(hi - 1) + 4}" class="h-lab">${r1(hi - 1)}</text><text x="4" y="${y(lo + 1) + 4}" class="h-lab">${r1(lo + 1)}</text>
-    <polyline points="${pts}" class="w-line"/>${ws.map(([d, v]) => `<circle cx="${x(d)}" cy="${y(v.weight)}" r="4" class="w-pt"><title>${niceDate(d)}: ${v.weight} kg</title></circle>`).join('')}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="hchart"><text x="${lx}" y="${y(hi - 1) + 4}" class="h-lab" text-anchor="${anchor}">${r1(hi - 1)}</text><text x="${lx}" y="${y(lo + 1) + 4}" class="h-lab" text-anchor="${anchor}">${r1(lo + 1)}</text>
+    <polyline points="${pts}" class="w-line"/>${ws.map(([d, v]) => `<circle cx="${x(d)}" cy="${y(v.weight)}" r="4" class="w-pt"><title>${niceDate(d)}: ${v.weight} ${t('kg')}</title></circle>`).join('')}</svg>`;
 }
 
 // ---------------- FOODS ----------------
 function viewFoods() {
   const st = viewFoods.st ||= { q: '', region: 'all' };
-  app.innerHTML = `<h2>Food database</h2><p class="muted small">${FOODS.length} built-in Egyptian & international foods, plus ${db.customFoods.length} of your own. Search in English or Arabic.</p>
-    <details class="card"><summary><h3>+ Add my own food</h3></summary>${customFoodForm()}</details>
-    <div class="toolbar"><input id="fq" type="search" placeholder="Search foods…" value="${h(st.q)}" dir="auto">
-      <select id="fr">${[['all', 'All'], ['eg', 'Egyptian'], ['intl', 'International'], ['basic', 'Basic'], ['custom', 'My foods']].map(([v, l]) => `<option value="${v}" ${st.region === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+  app.innerHTML = `<h2>${t('Food database')}</h2><p class="muted small">${t('{x} built-in Egyptian & international foods, plus {y} of your own. Search in English or Arabic.', { x: FOODS.length, y: db.customFoods.length })}</p>
+    <details class="card"><summary><h3>${t('+ Add my own food')}</h3></summary>${customFoodForm()}</details>
+    <div class="toolbar"><input id="fq" type="search" placeholder="${t('Search foods…')}" value="${h(st.q)}" dir="auto">
+      <select id="fr">${[['all', t('All')], ['eg', t('Egyptian')], ['intl', t('International')], ['basic', t('Basic')], ['custom', t('My foods')]].map(([v, l]) => `<option value="${v}" ${st.region === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <ul class="flist" id="fl"></ul>`;
   const run = () => {
     st.q = $('#fq').value; st.region = $('#fr').value;
-    $('#fl').innerHTML = searchFoods(st.q, st.region, 400).map((f) => foodRow(f, f.id.startsWith('c-') || f.id.startsWith('bc-') ? ` <button class="linkbtn" data-delfood="${h(f.id)}">delete</button>` : '')).join('');
+    $('#fl').innerHTML = searchFoods(st.q, st.region, 400).map((f) => foodRow(f, ` <span class="tag">${h(cat(f.cat))}</span>` + (f.id.startsWith('c-') || f.id.startsWith('bc-') ? ` <button class="linkbtn" data-delfood="${h(f.id)}">${t('delete')}</button>` : ''))).join('');
   };
   $('#fq').oninput = run; $('#fr').onchange = run; run();
-  $('#cf').onsubmit = (e) => { e.preventDefault(); db.customFoods.unshift(readCustom(e.target)); save(); e.target.reset(); toast('Food saved'); run(); };
+  $('#cf').onsubmit = (e) => { e.preventDefault(); db.customFoods.unshift(readCustom(e.target)); save(); e.target.reset(); toast(t('Food saved')); run(); };
   app.onclick = async (e) => {
     const del = e.target.closest('[data-delfood]');
-    if (del) { if (await confirmBox('Delete this food from My foods?')) { db.customFoods = db.customFoods.filter((f) => f.id !== del.dataset.delfood); save(); run(); } return; }
+    if (del) { if (await confirmBox(t('Delete this food from My foods?'))) { db.customFoods = db.customFoods.filter((f) => f.id !== del.dataset.delfood); save(); run(); } return; }
     const p = e.target.closest('[data-pick]'); if (p) { state.date = todayISO(); openAddWith(foodById(p.dataset.pick)); }
   };
 }
 function openAddWith(f) {
   // quick add from the Foods page: choose the meal, then quantity
-  const S = sheet(`<h3>Add ${h(f.name)}</h3><p class="small muted">${h(f.serving)} · ${r0(f.kcal)} kcal</p>
-    <div class="g2"><label class="fld"><span>Meal</span><select id="om">${MEALS.map(([k, l]) => `<option value="${k}" ${k === guessMeal() ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    <label class="fld"><span>Servings</span><input id="oq" type="number" value="1" step="0.25" inputmode="decimal"></label></div>
-    <button class="btn" id="ook">Add to today</button>`);
-  $('#ook', S.el).onclick = () => { addEntry(todayISO(), $('#om', S.el).value, f, +$('#oq', S.el).value || 1); toast('Added to today'); S.close(); };
+  const S = sheet(`<h3>${h(t('Add {x}', { x: fname(f) }))}</h3><p class="small muted">${h(srv(f.serving))} · ${r0(f.kcal)} ${t('kcal')}</p>
+    <div class="g2"><label class="fld"><span>${t('Meal')}</span><select id="om">${MEALS.map(([k]) => `<option value="${k}" ${k === guessMeal() ? 'selected' : ''}>${mealName(k)}</option>`).join('')}</select></label>
+    <label class="fld"><span>${t('Servings')}</span><input id="oq" type="number" value="1" step="0.25" inputmode="decimal"></label></div>
+    <button class="btn" id="ook">${t('Add to today')}</button>`);
+  $('#ook', S.el).onclick = () => { addEntry(todayISO(), $('#om', S.el).value, f, +$('#oq', S.el).value || 1); toast(t('Added to today')); S.close(); };
 }
 
 // ---------------- SETTINGS ----------------
 function viewSettings() {
   const s = db.settings;
-  app.innerHTML = `<h2>Settings</h2>
-  <div class="card"><h3>📷 AI meal scanner</h3>
-    <p class="small muted">The photo scanner uses Claude (by Anthropic) to recognise foods and estimate calories. Paste your own API key from
-    <b>console.anthropic.com → API keys</b>. The key is stored only on this device and is sent only to Anthropic. Each scan costs a few cents or less on your Anthropic account.</p>
-    <label class="fld"><span>Anthropic API key</span><input id="key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${h(s.apiKey)}"></label>
-    <div class="row gap"><button class="btn sm" id="saveKey">Save key</button>${s.apiKey ? '<button class="btn sm danger ghost" id="delKey">Remove key</button>' : ''}</div>
-    <p class="small muted">The barcode scanner and food search work without a key.</p></div>
-  <div class="card"><h3>💧 Water goal</h3><label class="fld"><span>Glasses per day</span><input id="wg" type="number" min="1" max="20" value="${s.waterGoal}"></label></div>
-  <div class="card"><h3>💾 Backup</h3>
-    <p class="small muted">Your plans, log and foods are saved in this browser. Download a backup to keep them safe or move them to another phone or computer.</p>
-    <div class="row gap wrap"><button class="btn sm" id="exp">Download backup</button>
-    <label class="btn sm ghost">Restore backup<input type="file" id="imp" accept="application/json,.json" hidden></label></div></div>
-  <div class="card"><h3>Danger zone</h3><button class="btn sm danger ghost" id="wipe">Delete all my nutrition data</button></div>
-  <p class="small muted">Calorie targets use the Mifflin-St Jeor equation. Food values are typical portions and are estimates. This app supports, and does not replace, advice from a dietitian or doctor.</p>`;
-  $('#saveKey').onclick = () => { s.apiKey = $('#key').value.trim(); save(); toast(s.apiKey ? 'Key saved' : 'Key cleared'); viewSettings(); };
+  app.innerHTML = `<h2>${t('Settings')}</h2>
+  <div class="card"><h3>🌐 ${t('Language')}</h3>
+    <div class="chips"><button class="chip ${AR() ? '' : 'on'}" data-lang="en">English</button><button class="chip ${AR() ? 'on' : ''}" data-lang="ar">العربية</button></div></div>
+  <div class="card"><h3>${t('📷 AI meal scanner')}</h3>
+    <p class="small muted">${t('The photo scanner uses Claude (by Anthropic) to recognise foods and estimate calories. Paste your own API key from')}
+    <b dir="ltr">console.anthropic.com → API keys</b>. ${t('The key is stored only on this device and is sent only to Anthropic. Each scan costs a few cents or less on your Anthropic account.')}</p>
+    <label class="fld"><span>${t('Anthropic API key')}</span><input id="key" type="password" autocomplete="off" placeholder="sk-ant-…" dir="ltr" value="${h(s.apiKey)}"></label>
+    <div class="row gap"><button class="btn sm" id="saveKey">${t('Save key')}</button>${s.apiKey ? `<button class="btn sm danger ghost" id="delKey">${t('Remove key')}</button>` : ''}</div>
+    <p class="small muted">${t('The barcode scanner and food search work without a key.')}</p></div>
+  <div class="card"><h3>${t('💧 Water goal')}</h3><label class="fld"><span>${t('Glasses per day')}</span><input id="wg" type="number" min="1" max="20" value="${s.waterGoal}"></label></div>
+  <div class="card"><h3>${t('💾 Backup')}</h3>
+    <p class="small muted">${t('Your plans, log and foods are saved in this browser. Download a backup to keep them safe or move them to another phone or computer.')}</p>
+    <div class="row gap wrap"><button class="btn sm" id="exp">${t('Download backup')}</button>
+    <label class="btn sm ghost">${t('Restore backup')}<input type="file" id="imp" accept="application/json,.json" hidden></label></div></div>
+  <div class="card"><h3>${t('Danger zone')}</h3><button class="btn sm danger ghost" id="wipe">${t('Delete all my nutrition data')}</button></div>
+  <p class="small muted">${t('Calorie targets use the Mifflin-St Jeor equation. Food values are typical portions and are estimates. This app supports, and does not replace, advice from a dietitian or doctor.')}</p>`;
+  app.onclick = (e) => { const b = e.target.closest('[data-lang]'); if (b) switchLang(b.dataset.lang); };
+  $('#saveKey').onclick = () => { s.apiKey = $('#key').value.trim(); save(); toast(s.apiKey ? t('Key saved') : t('Key cleared')); viewSettings(); };
   $('#delKey') && ($('#delKey').onclick = () => { s.apiKey = ''; save(); viewSettings(); });
-  $('#wg').onchange = (e) => { s.waterGoal = Math.max(1, +e.target.value || 8); save(); toast('Saved'); };
+  $('#wg').onchange = (e) => { s.waterGoal = Math.max(1, +e.target.value || 8); save(); toast(t('Saved')); };
   $('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify({ ...db, settings: { ...db.settings, apiKey: '' } }, null, 1)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `nutrition-backup-${todayISO()}.json`; a.click();
@@ -844,18 +890,20 @@ function viewSettings() {
     try {
       const data = JSON.parse(await f.text());
       if (!data.plans || !data.log) throw new Error('not a backup');
-      if (!(await confirmBox('Replace the data on this device with the backup?', 'Restore'))) return;
+      if (!(await confirmBox(t('Replace the data on this device with the backup?'), t('Restore')))) return;
       const key = db.settings.apiKey; db = Object.assign(blank(), data); db.settings = Object.assign(blank().settings, data.settings, { apiKey: key });
-      save(); toast('Backup restored'); viewSettings();
-    } catch { alert('This file is not a valid nutrition backup.'); }
+      save(); setLang(db.settings.lang); chrome(); toast(t('Backup restored')); viewSettings();
+    } catch { alert(t('This file is not a valid nutrition backup.')); }
   };
   $('#wipe').onclick = async () => {
-    if (!(await confirmBox('Delete ALL plans, food logs and custom foods on this device? This cannot be undone.'))) return;
-    db = blank(); save(); toast('All data deleted'); location.hash = '#/today';
+    if (!(await confirmBox(t('Delete ALL plans, food logs and custom foods on this device? This cannot be undone.')))) return;
+    const l = db.settings.lang; db = blank(); db.settings.lang = l; save(); toast(t('All data deleted')); location.hash = '#/today';
   };
 }
 
 // ---------------- start ----------------
+$('#langBtn')?.addEventListener('click', () => switchLang(AR() ? 'en' : 'ar'));
+chrome();
 window.__ntStarted = true;
 route();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
