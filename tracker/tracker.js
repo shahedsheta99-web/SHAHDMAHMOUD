@@ -858,4 +858,4 @@ function viewSettings() {
 // ---------------- start ----------------
 window.__ntStarted = true;
 route();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js', { scope: '../' }).catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

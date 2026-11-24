@@ -1,7 +1,7 @@
-/* =============== My Nutrition — extra styles (builds on ../css/style.css) =============== */
-:root { --cp: #0f766e; --cc: #d97706; --cf: #7c3aed; --water: #0284c7; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --cp: #2dd4bf; --cc: #fbbf24; --cf: #c4b5fd; --water: #38bdf8; } }
-:root[data-theme="dark"] { --cp: #2dd4bf; --cc: #fbbf24; --cf: #c4b5fd; --water: #38bdf8; }
+/* =============== My Nutrition — extra styles (builds on base.css) =============== */
+:root { --brand: #c2410c; --brand-ink: #ffffff; --brand-soft: #ffedd5; --cp: #0f766e; --cc: #d97706; --cf: #7c3aed; --water: #0284c7; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --brand: #fb923c; --brand-ink: #2a1205; --brand-soft: #3b2212; --cp: #2dd4bf; --cc: #fbbf24; --cf: #c4b5fd; --water: #38bdf8; } }
+:root[data-theme="dark"] { --brand: #fb923c; --brand-ink: #2a1205; --brand-soft: #3b2212; --cp: #2dd4bf; --cc: #fbbf24; --cf: #c4b5fd; --water: #38bdf8; }
 main { max-width: 860px; }
 body.noscroll { overflow: hidden; }
 

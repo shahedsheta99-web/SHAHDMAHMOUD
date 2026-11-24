@@ -39,8 +39,10 @@ from a single codebase. It is an *installable web app* (PWA): you open a link on
 
 ## My Nutrition (personal calorie tracker) — `tracker/`
 
-A second app in the same site, at `…/SHAHDMAHMOUD/tracker/` (also linked as **My Nutrition** in the top menu).
-Install it on your phone the same way (Add to Home Screen).
+A **separate app** that lives in the same repository but is fully independent of the pediatric app:
+its own address (https://shahedsheta99-web.github.io/SHAHDMAHMOUD/tracker/), icon, colours, styles,
+offline files (`tracker/sw.js`) and saved data. The pediatric app does not link to it.
+Install it on your phone on its own (open the link → Add to Home Screen).
 
 | Feature | Details |
 |---|---|
@@ -53,7 +55,7 @@ Install it on your phone the same way (Add to Home Screen).
 | History | 7/14/30-day calorie chart vs target, averages, days on target, logging streak, weight trend |
 | Backup | Data stays in the browser on your device; download / restore a backup file to move it |
 
-Files: `tracker/foods.js` (food list), `tracker/tracker.js` (screens and logic), `tracker/scanner.js` (scanners), `tracker/tracker.css`.
+Files: `tracker/foods.js` (food list), `tracker/tracker.js` (screens and logic), `tracker/scanner.js` (scanners), `tracker/base.css` + `tracker/tracker.css` (styles), `tracker/icons/`, `tracker/sw.js`.
 
 ---
 

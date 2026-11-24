@@ -22,6 +22,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   const same = url.origin === location.origin;
   if (!same && url.hostname !== 'www.gstatic.com') return;
+  if (same && url.pathname.includes('/tracker/')) return; // the tracker app has its own service worker
   e.respondWith((async () => {
     try {
       const res = await clean(same ? await fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : await fetch(req));
