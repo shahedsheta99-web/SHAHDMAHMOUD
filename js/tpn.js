@@ -37,10 +37,18 @@ export const LYTE_INFO = [
 ];
 
 // ---- Products (concentrations editable per order) ----
+// [id, name, % (g/100 mL), osmolarity mOsm/L, Na mEq/L, indication]
+// From "IV Amino Acid Solutions — Composition Comparison" (Nov 2026). null = not in the table.
 export const AA_PRODUCTS = [
-  ['amiparen', 'Amiparen 10%', 10], ['aminoven', 'Aminoven 10%', 10], ['aminoveninf', 'Aminoven Infant 10%', 10],
-  ['nephrosteril', 'Nephrosteril 7%', 7], ['nhepa', 'N-Hepa 8%', 8], ['kidmin', 'Kidmin 7.2%', 7.2], ['aminoleban', 'Aminoleban 8%', 8],
+  ['amiparen', 'Amiparen 10%', 10, 963, 2, 'Branched-chain AA support (stress, trauma, liver disease). Cl 120 mEq/L'],
+  ['aminoven', 'Aminoven 10%', 10, 990, 0, 'General parenteral nutrition (adult profile + taurine). N 16.2 g/L'],
+  ['aminoveninf', 'Aminoven Infant 10%', 10, 885, 0, 'Neonates & infants: taurine, tyrosine, cysteine, malic acid. N 14.9 g/L'],
+  ['kidmin', 'Kidmin 7.2%', 7.2, 600, 2, 'Renal failure: high BCAA 45.8%, no chloride, low Na, acetate 46 mEq/L'],
+  ['aminoleban', 'Aminoleban 8%', 8, 768, 12, 'Hepatic encephalopathy / liver failure: high BCAA, low AAA (Fischer ratio 37). Cl 94 mEq/L'],
+  ['nephrosteril', 'Nephrosteril 7%', 7, null, 0, 'Renal (not in the comparison table)'],
+  ['nhepa', 'N-Hepa 8%', 8, null, 0, 'Hepatic (not in the comparison table)'],
 ];
+export const DIPEPTIVEN = { osm: 921, maxMlKg: 2, maxPctAA: 20, maxWeeks: 3 };
 export const LIPID_PRODUCTS = [['smof', 'SMOFlipid 20%', 20]];
 export const DEX_STOCKS = [5, 10, 20, 25, 50];
 export const DEFAULT_CONC = {
@@ -124,11 +132,19 @@ export function computeTPN(t, ctx) {
   // Protein (amino acids)
   const aa = AA_PRODUCTS.find((x) => x[0] === t.aaProduct) || AA_PRODUCTS[0];
   const aaConc = n(t.aaConc) ?? aa[2];
-  res.aa = { name: aa[1], conc: aaConc, gkg: n(t.proteinGkg) ?? 0 };
+  res.aa = { name: aa[1], conc: aaConc, gkg: n(t.proteinGkg) ?? 0, info: aa[5] || '' };
   res.aa.g = res.aa.gkg * w; res.aa.ml = res.aa.g / (aaConc / 100);
+  res.aa.na = res.aa.ml * (aa[4] || 0) / 1000;                                  // mEq Na in the AA solution
+  res.aa.osm = aa[3] != null && n(t.aaConc) == null ? res.aa.ml * aa[3] / 1000 : res.aa.g * 10; // mOsm
   res.glut = t.glutamine ? { gkg: n(t.glutGkg) ?? 0.3 } : null;
   if (res.glut) { res.glut.g = res.glut.gkg * w; res.glut.ml = res.glut.g / (conc.dipeptiven / 100); }
   const proteinG = res.aa.g + (res.glut?.g || 0);
+  if (res.glut) {
+    const mlkg = res.glut.ml / w, pct = proteinG ? res.glut.g / proteinG * 100 : 0;
+    if (mlkg > DIPEPTIVEN.maxMlKg + 1e-9) res.warnings.push(['bad', `Dipeptiven ${mlkg.toFixed(2)} mL/kg/day is above the maximum ${DIPEPTIVEN.maxMlKg} mL/kg/day.`]);
+    if (pct > DIPEPTIVEN.maxPctAA + 1e-9) res.warnings.push(['warn', `Dipeptiven is ${pct.toFixed(0)}% of the total amino acids (should be ≤ ${DIPEPTIVEN.maxPctAA}%).`]);
+    res.warnings.push(['warn', `Dipeptiven: give for ≤ ${DIPEPTIVEN.maxWeeks} weeks; it must be diluted (mixed into the amino acid / PN bag).`]);
+  }
   res.proteinKcal = proteinG * 4;
 
   // Lipid
@@ -153,7 +169,7 @@ export function computeTPN(t, ctx) {
   ['na', 'k', 'ca', 'p', 'mg'].forEach((k) => { res.lytes[k] = { perKg: L[k], day: L[k] * w, range: lyteRange(k, lg, w) }; });
   const pMl = res.lytes.p.day / conc.glycoP;
   const naFromGlyco = pMl * conc.glycoNa;
-  const naclMeq = Math.max(0, res.lytes.na.day - naFromGlyco);
+  const naclMeq = Math.max(0, res.lytes.na.day - naFromGlyco - res.aa.na);
   if (naFromGlyco > res.lytes.na.day + 0.01 && res.lytes.p.day > 0) res.warnings.push(['warn', `Glycophos alone gives ${naFromGlyco.toFixed(1)} mEq Na, more than the ${res.lytes.na.day.toFixed(1)} mEq Na ordered.`]);
   res.add = [
     { key: 'nacl', name: 'NaCl', amount: naclMeq, unit: 'mEq', ml: naclMeq / conc.nacl, conc: `${conc.nacl * 1000} mEq/L` },
@@ -185,7 +201,8 @@ export function computeTPN(t, ctx) {
   const base = fixed + res.dex.ml + extra;
   // Osmolarity numerator (your sheet's method): AA g×10 + dextrose g×5 + lipid g×1.3 (if in bag) + (Na+K+Ca+Mg mEq + P mmol)×2
   const lyteSum = res.lytes.na.day + res.lytes.k.day + res.lytes.ca.day + res.lytes.mg.day + res.lytes.p.day;
-  const osm = proteinG * 10 + dexG * 5 + (res.lipid.inBag ? res.lipid.g * 1.3 : 0) + lyteSum * 2;
+  // amino acids: product osmolarity from the comparison table when known (else g × 10)
+  const osm = res.aa.osm + (res.glut ? res.glut.ml * DIPEPTIVEN.osm / 1000 : 0) + dexG * 5 + (res.lipid.inBag ? res.lipid.g * 1.3 : 0) + lyteSum * 2;
   res.osmTotal = osm;
   const lipidBagMl = res.lipid.inBag ? res.lipid.ml : 0;
   const needOsm = line === 'peripheral' ? osm / 900 * 1000 : 0;          // mL needed for ≤ 900 mOsm/L

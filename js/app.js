@@ -3,7 +3,7 @@
 // =====================================================================
 import { store, newId } from './store.js';
 import * as C from './calc.js';
-import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
+import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, allFormulas, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
 import { LABS, labFlag } from './labs.js';
 import { growthChart, trendChart } from './charts.js';
 import * as TPN from './tpn.js';
@@ -691,7 +691,7 @@ function updateTPNLive() {
   const hint = (k, txt) => { const el = form.querySelector(`[data-hint="${k}"]`); if (el) el.textContent = txt; };
   if (m) {
     const st = { init: 'initiation', adv: 'advancing', goal: 'goal' }[res.stage];
-    hint('protein', `ASPEN ${st}: ${res.ranges.protein.join('–')} g/kg/day${m.protein.max ? ` (max ${m.protein.max})` : ''}`);
+    hint('protein', `ASPEN ${st}: ${res.ranges.protein.join('–')} g/kg/day${m.protein.max ? ` (max ${m.protein.max})` : ''}. ${res.aa.info}${res.aa.na ? ` · gives ${res.aa.na.toFixed(1)} mEq Na` : ''}`);
     hint('lipid', `ASPEN ${st}: ${res.ranges.lipid.join('–')} g/kg/day; advance by ${m.lipid.adv.join('–')} g/kg/day`);
     hint('gir', `ASPEN ${st}: GIR ${res.ranges.gir.join('–')} mg/kg/min; advance by ${m.gir.adv.join('–')}/day${m.gir.max ? `; max ${m.gir.max}` : ''}`);
     TPN.LYTE_INFO.forEach(([k, , u]) => hint('lyte-' + k, `ASPEN ${res.lytes[k].range.text} (${u})${ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k] ? ` · lab ${ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k].v} ${flagText(labFlag({ ca: 'tca', p: 'po4' }[k] || k, ctx.labs[{ ca: 'tca', p: 'po4' }[k] || k].v))}` : ''}`));
@@ -1140,7 +1140,7 @@ document.addEventListener('submit', async (ev) => {
     return;
   }
   if (form.id === 'formulaForm') {
-    const list = JSON.parse(JSON.stringify(formulas()));
+    const list = JSON.parse(JSON.stringify(allFormulas()));
     const numK = ['minAge', 'maxAge', 'scoops', 'volume', 'kcal', 'protein', ...ELECTROLYTES.map((e) => e[0])];
     numK.forEach((k) => { d[k] = d[k] === '' ? null : +d[k]; });
     const id = form.dataset.id || d.name.toLowerCase().replace(/[^a-z0-9]+/g, '') + '-' + newId().slice(-4);
@@ -1227,7 +1227,10 @@ const actions = {
   print: () => window.print(),
   deleteFormula: async (el) => {
     if (!(await askConfirm('Delete this product from the list?'))) return;
-    saveFormulas(formulas().filter((f) => f.id !== el.dataset.id), 'Product deleted'); go('#/formulas');
+    const id = el.dataset.id;
+    const list = JSON.parse(JSON.stringify(allFormulas()));
+    const next = DEFAULT_FORMULAS.some((d) => d.id === id) ? list.map((f) => (f.id === id ? { ...f, hidden: true } : f)) : list.filter((f) => f.id !== id);
+    saveFormulas(next, 'Product deleted'); go('#/formulas');
   },
   resetFormulas: async () => {
     if (!(await askConfirm('Go back to the original formula list? Your edits will be removed.', 'Reset'))) return;

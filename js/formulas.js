@@ -9,34 +9,45 @@
 //    na, k, ca, p, mg = mg PER SERVING (null = not known yet → add from the label)
 //    type: 'complete' = can be the main formula, 'module' = add-on (e.g. protein powder)
 //    source: where the electrolyte values came from
-//  IV products are intentionally ignored for now.
+//  IV products (amino acids, Dipeptiven) are in js/tpn.js.
 //
-//  Electrolyte values below were scaled per 100 kcal from the manufacturer's
-//  data sheets to the kcal per serving in your PDF. Formulations differ between
-//  countries, so CHECK THEM AGAINST THE LABEL OF THE PRODUCT YOU USE.
-//   Peptamen Junior: Nestlé UK data card, powder at 1 kcal/mL (2023): Na 68, K 134, P 62 mg/100 kcal
-//   Peptamen:        Nestlé Singapore powder (per 100 g = 466 kcal): Na 400, K 520, P 310 mg
-//   Supportan:       Fresenius Kabi data card, per 100 mL (150 kcal): Na 47.5, K 128, P 120 mg
+//  Electrolyte values (mg per serving) come from the label comparison tables you sent
+//  ("Nutritional Formula Comparison", "ONS Comparison Table", Nov 2026). Where the label
+//  reference amount differs from your serving (e.g. "per 100 g powder"), values were
+//  scaled by energy: label value × (serving kcal ÷ label kcal).
 // =====================================================================
+const SRC1 = 'Nutritional Formula Comparison (label)';
+const SRC2 = 'ONS Comparison Table (label)';
 export const DEFAULT_FORMULAS = [
-  { id: 'pediasure',   name: 'Pediasure',     minAge: 1,  maxAge: 10, scoops: 5,    volume: 200,  kcal: 225, protein: 6.7,  type: 'complete', note: '' },
-  { id: 'gf',          name: 'G.F',           minAge: 1,  maxAge: 12, scoops: 2,    volume: 100,  kcal: 118, protein: 6.2,  type: 'complete', note: '' },
-  { id: 'ensure',      name: 'Ensure',        minAge: 10, maxAge: 99, scoops: 6,    volume: 230,  kcal: 230, protein: 8.5,  type: 'complete', note: '' },
-  { id: 'bioganers',   name: 'Bioganers',     minAge: 3,  maxAge: 99, scoops: 2,    volume: 100,  kcal: 120, protein: 7,    type: 'complete', note: '' },
-  { id: 'blendra',     name: 'Blendra',       minAge: 3,  maxAge: 99, scoops: 6,    volume: 160,  kcal: 225, protein: 8.4,  type: 'complete', note: '' },
-  { id: 'forticare',   name: 'Forticare',     minAge: 3,  maxAge: 99, scoops: null, volume: null, kcal: 203, protein: 11,   type: 'complete', note: '' },
-  { id: 'fortisip',    name: 'Fortisip',      minAge: 3,  maxAge: 99, scoops: null, volume: null, kcal: 203, protein: 11,   type: 'complete', note: '' },
-  { id: 'supportan',   name: 'Supportan',     minAge: 3,  maxAge: 99, scoops: null, volume: 200,  kcal: 300, protein: 20,   type: 'complete', note: '',
-    na: 95, k: 256, p: 240, source: 'Fresenius Kabi Supportan Drink data card (per 100 mL ×2)' },
-  { id: 'ferrusbin',   name: 'Ferrusbin',     minAge: 3,  maxAge: 99, scoops: null, volume: null, kcal: 400, protein: 20,   type: 'complete', note: '' },
-  { id: 'neomune',     name: 'Neomune',       minAge: 3,  maxAge: 99, scoops: 7,    volume: 250,  kcal: 254, protein: 15.6, type: 'complete', note: '' },
-  { id: 'aminoliban',  name: 'Aminoliban',    minAge: 3,  maxAge: 99, scoops: 5,    volume: 200,  kcal: 210, protein: 13.5, type: 'complete', note: '' },
-  { id: 'peptaminjr',  name: 'Peptamen Jr.',  minAge: 1,  maxAge: 10, scoops: 7,    volume: 210,  kcal: 250, protein: 7,    type: 'complete', note: '',
-    na: 170, k: 335, p: 155, source: 'Nestlé UK Peptamen Junior powder data card 2023 (scaled per 100 kcal)' },
-  { id: 'peptaminace', name: 'Peptamen ACE',  minAge: 10, maxAge: 13, scoops: 6,    volume: 210,  kcal: 242, protein: 9,    type: 'complete', note: '' },
-  { id: 'peptamin',    name: 'Peptamen',      minAge: 13, maxAge: 99, scoops: 6,    volume: 210,  kcal: 250, protein: 10,   type: 'complete', note: '',
-    na: 215, k: 279, p: 166, source: 'Nestlé Singapore Peptamen powder (scaled per 100 kcal)' },
-  { id: 'ferrusbinpd', name: 'Ferrusbin pd.', minAge: 1,  maxAge: 99, scoops: 2,    volume: 100,  kcal: 54,  protein: 13.2, type: 'module',   note: 'Protein powder – use as add-on' },
+  { id: 'pediasure',   name: 'Pediasure',          minAge: 1,  maxAge: 10, scoops: 5,    volume: 200,  kcal: 225,   protein: 6.7,  type: 'complete', note: '' },
+  { id: 'gf',          name: 'G.F',                minAge: 1,  maxAge: 12, scoops: 2,    volume: 100,  kcal: 118,   protein: 6.2,  type: 'complete', note: '' },
+  { id: 'ensure',      name: 'Ensure',             minAge: 10, maxAge: 99, scoops: 6,    volume: 230,  kcal: 230,   protein: 8.5,  type: 'complete',
+    na: 154, k: 304, ca: 115, p: 108, mg: 31.1, note: 'General supplement, lactose-free', source: SRC1 + ', per 100 g scaled' },
+  { id: 'bioganers',   name: 'Bio Gainers S10',    minAge: 3,  maxAge: 99, scoops: 2,    volume: 100,  kcal: 120,   protein: 7,    type: 'complete',
+    na: 254, k: 454, ca: 296, p: 252, mg: 35.6, note: 'High-calorie supplement', source: SRC1 + ', scaled; Ca read as mg (label says mcg)' },
+  { id: 'blendra',     name: 'Plendra (Blendra)',  minAge: 3,  maxAge: 99, scoops: 6,    volume: 160,  kcal: 225,   protein: 8.4,  type: 'complete',
+    na: 178, k: 247, ca: 121, p: 127, mg: 56, note: 'General malnutrition / diabetes support, FOS', source: SRC1 + ', per 50 g' },
+  { id: 'oncepro',     name: 'Once PRO',           minAge: 3,  maxAge: 99, scoops: null, volume: null, kcal: 204,   protein: 9.96, type: 'complete',
+    na: 199, k: 332, ca: 133, p: 136, mg: 44.2, note: 'Low GI / diabetes. Serving 40 g powder. Age group not on label: check', source: SRC1 + ', per 40 g' },
+  { id: 'forticare',   name: 'FortiCare',          minAge: 3,  maxAge: 99, scoops: null, volume: 125,  kcal: 203.7, protein: 11,   type: 'complete',
+    na: 137.5, k: 268.75, ca: 212.5, p: 150, mg: 35, note: 'Oncology, EPA-enriched, 1.63 kcal/mL. Not < 3 y', source: SRC2 + ', per 125 mL' },
+  { id: 'fortisip',    name: 'Fortisip',           minAge: 3,  maxAge: 99, scoops: null, volume: 200,  kcal: 245,   protein: 14.6, type: 'complete',
+    na: 35, k: 97.6, ca: 350, p: 282, mg: 54, note: 'Disease-related malnutrition. Caution 3–6 y', source: SRC2 + ', per 200 mL' },
+  { id: 'fresubin',    name: 'Fresubin Original DRINK', minAge: 3, maxAge: 99, scoops: null, volume: 200, kcal: 200, protein: 7.6, type: 'complete',
+    na: 150, k: 250, ca: 120, p: 94, mg: 40, note: '1 kcal/mL, fibre-free. Not < 3 y, caution < 6 y', source: SRC2 + ', per 200 mL' },
+  { id: 'supportan',   name: 'Supportan DRINK',    minAge: 3,  maxAge: 99, scoops: null, volume: 200,  kcal: 300,   protein: 20,   type: 'complete',
+    na: 95, k: 256, ca: 406, p: 240, mg: 52, note: 'Cancer / cachexia, EPA+DHA, MCT. Not < 3 y', source: SRC2 + ', per 200 mL' },
+  { id: 'ferrusbin',   name: 'Ferrusbin',          minAge: 3,  maxAge: 99, scoops: null, volume: null, kcal: 400,   protein: 20,   type: 'complete', note: '' },
+  { id: 'neomune',     name: 'Neo-Mune',           minAge: 3,  maxAge: 99, scoops: 7,    volume: 250,  kcal: 254,   protein: 15.6, type: 'complete',
+    na: 199.5, k: 252, ca: 149.5, p: 57, mg: 71.3, note: 'Immunonutrition: arginine, glutamine, fish oil, MCT', source: SRC1 + ', per 60 g' },
+  { id: 'aminoliban',  name: 'Aminoleban Oral',    minAge: 3,  maxAge: 99, scoops: 5,    volume: 200,  kcal: 210,   protein: 13.5, type: 'complete',
+    na: 47.5, k: 162, ca: 69, p: 83.8, mg: 20.2, note: 'Liver disease / hepatic encephalopathy: high BCAA, low AAA', source: SRC1 + ', per 50 g' },
+  { id: 'peptaminjr',  name: 'Peptamen Jr.',       minAge: 1,  maxAge: 10, scoops: 7,    volume: 210,  kcal: 250,   protein: 7,    type: 'complete',
+    na: 170, k: 335, p: 155, note: '', source: 'Nestlé UK Peptamen Junior powder data card 2023 (scaled per 100 kcal)' },
+  { id: 'peptaminace', name: 'Peptamen ACE',       minAge: 10, maxAge: 13, scoops: 6,    volume: 210,  kcal: 242,   protein: 9,    type: 'complete', note: '' },
+  { id: 'peptamin',    name: 'Peptamen',           minAge: 13, maxAge: 99, scoops: 6,    volume: 210,  kcal: 250,   protein: 10,   type: 'complete',
+    na: 217, k: 285, ca: 255, p: 178, mg: 62.5, note: 'Peptide-based, MCT: malabsorption / critical illness', source: SRC1 + ', per 100 g scaled' },
+  { id: 'ferrusbinpd', name: 'Ferrusbin pd.',      minAge: 1,  maxAge: 99, scoops: 2,    volume: 100,  kcal: 54,    protein: 13.2, type: 'module',   note: 'Protein powder – use as add-on' },
 ];
 
 // Electrolytes tracked: key, label, lab key, mg per mmol
@@ -45,9 +56,26 @@ export const ELECTROLYTES = [
 ];
 
 // The active list: the user's edited list (saved in their account) or the default.
+// A saved list is merged with the defaults: your own values are kept, empty
+// fields are filled from the defaults, and new default products are added.
+// Deleted default products are kept with hidden: true so they do not come back.
 let custom = null;
-export function setCustomFormulas(list) { custom = Array.isArray(list) && list.length ? list : null; }
-export const formulas = () => custom || DEFAULT_FORMULAS;
+const FILL = ['na', 'k', 'ca', 'p', 'mg', 'note', 'source'];
+const empty = (v) => v === null || v === undefined || v === '';
+export function setCustomFormulas(list) {
+  if (!Array.isArray(list) || !list.length) { custom = null; return; }
+  const merged = list.map((it) => {
+    const d = DEFAULT_FORMULAS.find((x) => x.id === it.id);
+    if (!d) return it;
+    const out = { ...it };
+    FILL.forEach((k) => { if (empty(out[k]) && !empty(d[k])) out[k] = d[k]; });
+    return out;
+  });
+  DEFAULT_FORMULAS.forEach((d) => { if (!merged.some((x) => x.id === d.id)) merged.push({ ...d }); });
+  custom = merged;
+}
+export const allFormulas = () => custom || DEFAULT_FORMULAS;
+export const formulas = () => allFormulas().filter((f) => !f.hidden);
 export const isCustomized = () => !!custom;
 
 export const ageLabel = (f) => (f.maxAge >= 99 ? `> ${f.minAge} y` : `${f.minAge}–${f.maxAge} y`);
