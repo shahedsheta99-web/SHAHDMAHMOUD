@@ -75,6 +75,26 @@ export function setCustomFormulas(list) {
   custom = merged;
 }
 export const allFormulas = () => custom || DEFAULT_FORMULAS;
+export const FORMULA_DATA_DATE = '28 Nov 2026';
+// Replace every default product with the latest data (keeps your own added products
+// and keeps deleted products hidden).
+export function latestDataList() {
+  const list = (custom || DEFAULT_FORMULAS).map((it) => {
+    const d = DEFAULT_FORMULAS.find((x) => x.id === it.id);
+    return d ? { ...d, ...(it.hidden ? { hidden: true } : {}) } : it;
+  });
+  DEFAULT_FORMULAS.forEach((d) => { if (!list.some((x) => x.id === d.id)) list.push({ ...d }); });
+  return list;
+}
+// Default products whose saved values differ from the latest data
+export function outdatedProducts() {
+  if (!custom) return [];
+  const keys = ['name', 'kcal', 'protein', 'scoops', 'volume', 'minAge', 'maxAge', 'na', 'k', 'ca', 'p', 'mg'];
+  return custom.filter((it) => !it.hidden).filter((it) => {
+    const d = DEFAULT_FORMULAS.find((x) => x.id === it.id);
+    return d && keys.some((k) => String(it[k] ?? '') !== String(d[k] ?? ''));
+  }).map((it) => it.name);
+}
 export const formulas = () => allFormulas().filter((f) => !f.hidden);
 export const isCustomized = () => !!custom;
 

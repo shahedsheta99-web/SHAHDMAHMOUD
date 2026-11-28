@@ -3,7 +3,7 @@
 // =====================================================================
 import { store, newId } from './store.js';
 import * as C from './calc.js';
-import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, allFormulas, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
+import { DEFAULT_FORMULAS, ELECTROLYTES, formulas, allFormulas, FORMULA_DATA_DATE, latestDataList, outdatedProducts, setCustomFormulas, isCustomized, ageLabel, formulaById, fitsAge, recommendFormulas, regimenTotals } from './formulas.js';
 import { LABS, labFlag } from './labs.js';
 import { growthChart, trendChart } from './charts.js';
 import * as TPN from './tpn.js';
@@ -1069,6 +1069,8 @@ function viewFormulas(parts = []) {
   const v = (x) => (x === null || x === undefined || x === '' ? '<span class="muted">?</span>' : h(x));
   return `<div class="card"><div class="row between"><h2>Oral formula list</h2>
     <div class="row gap"><a class="btn sm" href="#/formulas/new">+ Add product</a>${isCustomized() ? '<button class="btn sm ghost" data-action="resetFormulas">Reset to original list</button>' : ''}</div></div>
+    <p class="small">Formula data version: <b>${FORMULA_DATA_DATE}</b> (Nutritional Formula Comparison, ONS Comparison Table).</p>
+    ${outdatedProducts().length ? `<div class="alert warn">Your saved list keeps your older values for: <b>${h(outdatedProducts().join(', '))}</b>. <button class="btn sm" data-action="loadLatestFormulas">Load the latest label data</button><br><small>Products you added yourself are kept.</small></div>` : ''}
     <p class="small muted">Tap <b>Edit</b> to change a product or add its electrolytes from the label. ${store.mode === 'cloud' ? 'Changes are saved to your account and appear on all your devices.' : 'Changes are saved on this device.'} IV products are not included yet. "?" = not entered yet.</p>
     <div class="tablewrap"><table class="tbl"><thead><tr><th>ONS</th><th>Age gp.</th><th>Serving</th><th>kcal</th><th>Protein (g)</th><th>g ptn / 100 kcal</th>${ELECTROLYTES.map(([, l]) => `<th>${l} mg</th>`).join('')}<th>Source / note</th><th></th></tr></thead><tbody>
     ${list.map((f) => `<tr><td><b>${h(f.name)}</b>${f.type === 'module' ? ' <span class="pill">module</span>' : ''}</td><td>${h(ageLabel(f))}</td><td>${f.scoops ? f.scoops + ' scoops' : ''}${f.scoops && f.volume ? ' / ' : ''}${f.volume ? f.volume + ' mL' : ''}${!f.scoops && !f.volume ? '—' : ''}</td><td>${f.kcal}</td><td>${f.protein}</td><td>${fmt((f.protein / f.kcal) * 100)}</td>
@@ -1232,6 +1234,10 @@ const actions = {
     const next = DEFAULT_FORMULAS.some((d) => d.id === id) ? list.map((f) => (f.id === id ? { ...f, hidden: true } : f)) : list.filter((f) => f.id !== id);
     saveFormulas(next, 'Product deleted'); go('#/formulas');
   },
+  loadLatestFormulas: async () => {
+    if (!(await askConfirm('Replace the values of the standard products with the latest label data? Products you added yourself are kept.', 'Load latest data'))) return;
+    saveFormulas(latestDataList(), 'Latest formula data loaded'); render();
+  },
   resetFormulas: async () => {
     if (!(await askConfirm('Go back to the original formula list? Your edits will be removed.', 'Reset'))) return;
     saveFormulas(null, 'Original list restored'); render();
@@ -1272,6 +1278,8 @@ store.init((user) => {
 }).catch((e) => { state.ready = true; $('#app').innerHTML = `<div class="card bad">Could not start: ${h(e.message)}</div>`; });
 
 window.__pnStarted = true;
+const APP_VERSION = '28 Nov 2026';
+try { const cr = document.querySelector('footer.credit'); if (cr) cr.textContent = `Created by Shahed Mahmoud · version ${APP_VERSION}`; } catch {}
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   try {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => reg.update()).catch(() => {});
