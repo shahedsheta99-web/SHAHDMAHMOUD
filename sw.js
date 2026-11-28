@@ -2,7 +2,7 @@
 // "Network first, always revalidated": when online, every file is checked with
 // GitHub (cache: 'no-cache'), so a phone never mixes old and new files after an
 // update. When offline, the last saved copy is used.
-const CACHE = 'pednutrition-v2';
+const CACHE = 'pednutrition-v3';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
   for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
@@ -22,6 +22,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   const same = url.origin === location.origin;
   if (!same && url.hostname !== 'www.gstatic.com') return;
+  if (same && url.pathname.includes('/tracker/')) return; // the tracker app has its own service worker
   e.respondWith((async () => {
     try {
       const res = await clean(same ? await fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : await fetch(req));

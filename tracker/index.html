@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My Nutrition</title>
+  <meta name="description" content="Nutrition plans, daily calorie tracker, meal scanners and recommendations with Egyptian and international foods.">
+  <meta name="theme-color" content="#ea580c">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="My Nutrition">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="tracker.css">
+</head>
+<body>
+  <header class="topbar no-print">
+    <a href="#/today" class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"> <span data-i18n="My Nutrition">My Nutrition</span></a>
+    <nav class="tnav" aria-label="Main">
+      <a href="#/today" data-p="today"><i>🍽️</i><span data-i18n="Today">Today</span></a>
+      <a href="#/plans" data-p="plans"><i>📋</i><span data-i18n="Plans">Plans</span></a>
+      <a href="#/recommend" data-p="recommend"><i>💡</i><span data-i18n="Ideas">Ideas</span></a>
+      <a href="#/history" data-p="history"><i>📈</i><span data-i18n="History">History</span></a>
+      <a href="#/foods" data-p="foods"><i>🥙</i><span data-i18n="Foods">Foods</span></a>
+      <a href="#/settings" data-p="settings"><i>⚙️</i><span data-i18n="Settings">Settings</span></a>
+    </nav>
+    <button id="langBtn" class="btn ghost sm langbtn" type="button">عربي</button>
+  </header>
+  <main id="app"><div class="center muted">Loading…</div></main>
+  <footer class="credit no-print">Created by Shahed Mahmoud</footer>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script>
+    setTimeout(function () {
+      if (window.__ntStarted) return;
+      var ar = (document.documentElement.lang === 'ar');
+      document.getElementById('app').innerHTML = ar
+        ? '<div class="card narrow"><b>التطبيق مشتغلش.</b><p>اتأكد من الإنترنت وحمّل الصفحة تاني. بياناتك في أمان.</p><button class="btn" onclick="location.reload()">إعادة تحميل</button></div>'
+        : '<div class="card narrow"><b>The app could not start.</b><p>Check your internet connection and reload. Your data is safe.</p><button class="btn" onclick="location.reload()">Reload</button></div>';
+    }, 8000);
+  </script>
+  <script type="module" src="tracker.js"></script>
+</body>
+</html>
